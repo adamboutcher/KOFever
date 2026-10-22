@@ -383,26 +383,43 @@ end
 
 --- Shows cached articles. When they span more than one category, a category list comes first,
 -- with an "All articles" entry; tapping a category shows its articles and the back arrow returns.
+-- The list stays open under an opened article and is refreshed when the article is closed.
 function KOFever:showArticleList()
     local store = getStore()
     local show_read = self:showReadArticles()
-    local all_items = store:getSortedItems(show_read)
-    local categories = store:getCategories(show_read)
+    local categories_title = _("Categories")
     local menu
+    -- Key of the article list being shown ("all", "uncategorised" or a group ID), nil for the category list.
+    local current_key
+    local views, category_table, refresh
+
+    local function countUnread(items)
+        local unread = 0
+        for _, item in ipairs(items) do
+            if not item.read then
+                unread = unread + 1
+            end
+        end
+        return unread
+    end
+
+    local function articlesTitle(name, unread)
+        return show_read and T(_("%1 (%2 unread)"), name, unread) or name
+    end
 
     local function articleTable(items)
         local item_table = {}
-        for _, item in ipairs(items) do
-            local feed_title = displayTitle(store:getFeedTitle(item.feed_id))
+        for index, item in ipairs(items) do
             local article_id = item.id
             table.insert(item_table, {
                 text = displayTitle(item.title),
                 -- With read articles shown, unread titles are bold and read titles normal weight.
                 bold = show_read and not item.read,
-                mandatory = feed_title,
+                mandatory = displayTitle(store:getFeedTitle(item.feed_id)),
                 callback = function()
-                    UIManager:close(menu)
-                    self:openArticle(article_id)
+                    self:openArticle(article_id, function()
+                        refresh(index)
+                    end)
                 end,
             })
         end
@@ -415,18 +432,55 @@ function KOFever:showArticleList()
         return item_table
     end
 
-    local function articlesTitle(name, unread)
-        return show_read and T(_("%1 (%2 unread)"), name, unread) or name
+    -- (Re)reads the cache into `views` (one per article list) and `category_table`.
+    local function build()
+        local all_items = store:getSortedItems(show_read)
+        views = { all = { name = _("All articles"), items = all_items, unread = countUnread(all_items) } }
+        category_table = {}
+        local function addCategory(key, name, items, unread)
+            local index = #category_table + 1
+            views[key] = { name = name, items = items, unread = unread }
+            table.insert(category_table, {
+                text = name,
+                bold = show_read and unread > 0,
+                mandatory = tostring(unread),
+                callback = function()
+                    -- Remember where we were so the back arrow can return to it.
+                    table.insert(menu.paths, { index = index, name = name })
+                    current_key = key
+                    menu:switchItemTable(articlesTitle(name, unread), articleTable(items))
+                end,
+            })
+        end
+        addCategory("all", views.all.name, all_items, views.all.unread)
+        for _, category in ipairs(store:getCategories(show_read)) do
+            local name = displayTitle(category.title)
+            if not category.id then
+                name = _("Uncategorised")
+            elseif not name or name == "" then
+                name = T(_("Category %1"), category.id)
+            end
+            addCategory(category.id or "uncategorised", name, category.items, category.unread)
+        end
     end
 
-    local function countUnread(items)
-        local unread = 0
-        for _, item in ipairs(items) do
-            if not item.read then
-                unread = unread + 1
-            end
+    build()
+    -- With one category or none (e.g. before the first sync that fetched categories), skip the category list.
+    local use_categories = #category_table > 2
+
+    --- Rebuilds the current article list after an article was opened, staying near `position`.
+    refresh = function(position)
+        build()
+        local view
+        if use_categories then
+            local path = menu.paths[#menu.paths]
+            -- A category emptied by reading its last article is shown empty rather than vanishing.
+            view = views[current_key] or { name = path and path.name or "", items = {}, unread = 0 }
+        else
+            view = views.all
+            view.name = show_read and _("Articles") or _("Unread articles")
         end
-        return unread
+        menu:switchItemTable(articlesTitle(view.name, view.unread), articleTable(view.items), position)
     end
 
     local menu_options = {
@@ -436,39 +490,12 @@ function KOFever:showArticleList()
         title_bar_fm_style = true,
     }
 
-    -- With one category or none (e.g. before the first sync that fetched categories), skip the category list.
-    if #categories <= 1 then
-        menu_options.title = articlesTitle(show_read and _("Articles") or _("Unread articles"), countUnread(all_items))
-        menu_options.item_table = articleTable(all_items)
+    if not use_categories then
+        menu_options.title = articlesTitle(show_read and _("Articles") or _("Unread articles"), views.all.unread)
+        menu_options.item_table = articleTable(views.all.items)
         menu = Menu:new(menu_options)
         UIManager:show(menu)
         return
-    end
-
-    local categories_title = _("Categories")
-    local category_table = {}
-    local function addCategory(name, items, unread)
-        local index = #category_table + 1
-        table.insert(category_table, {
-            text = name,
-            bold = show_read and unread > 0,
-            mandatory = tostring(unread),
-            callback = function()
-                -- Remember where we were so the back arrow can return to it.
-                table.insert(menu.paths, { index = index })
-                menu:switchItemTable(articlesTitle(name, unread), articleTable(items))
-            end,
-        })
-    end
-    addCategory(_("All articles"), all_items, countUnread(all_items))
-    for _, category in ipairs(categories) do
-        local name = displayTitle(category.title)
-        if not category.id then
-            name = _("Uncategorised")
-        elseif not name or name == "" then
-            name = T(_("Category %1"), category.id)
-        end
-        addCategory(name, category.items, category.unread)
     end
 
     menu_options.title = categories_title
@@ -476,6 +503,9 @@ function KOFever:showArticleList()
     menu_options.onReturn = function()
         local path = table.remove(menu.paths)
         if path then
+            current_key = nil
+            -- Rebuild so the unread counts include articles read in the meantime.
+            build()
             menu:switchItemTable(categories_title, category_table, path.index)
         end
     end
@@ -491,11 +521,14 @@ function KOFever:showArticleList()
     UIManager:show(menu)
 end
 
-function KOFever:openArticle(id)
+--- Opens an article in a TextViewer.
+-- @func[opt] close_callback called when the viewer is closed (or the article could not be opened)
+function KOFever:openArticle(id, close_callback)
     local store = getStore()
     local item = store:getItem(id)
     if not item then
         self:showMessage(_("This article is no longer in the cache. Run Sync now."))
+        if close_callback then close_callback() end
         return
     end
     local text = store:getText(id)
@@ -505,6 +538,7 @@ function KOFever:openArticle(id)
         store:removeItem(id)
         store:save()
         self:showMessage(_("This article's text is missing from the cache. Run Sync now to download it again."))
+        if close_callback then close_callback() end
         return
     end
     store:markOpened(id)
@@ -521,6 +555,7 @@ function KOFever:openArticle(id)
         title_multilines = true,
         text = table.concat(parts, "\n"),
         text_type = "general",
+        close_callback = close_callback,
     })
 end
 
