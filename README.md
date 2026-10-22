@@ -17,6 +17,7 @@ The plugin adds a **KOFever** entry to the Tools menu with these items:
 - **Sync now**: turns Wi-Fi on if needed, sends any reads queued offline, then downloads unread articles.
 - **Browse unread articles** (or **Browse articles** when read articles are shown): lists cached articles, newest first, with the feed name on the right. Tap an article to read it as plain text.
 - **Show read articles**: a checkbox, off by default. See below.
+- **Cache size**: how many articles are kept on the device, from 50 to 3000 in steps of 50 (default 200). Hold the arrows to change it by 500 at a time. Lowering it removes articles straight away: read ones first, then the oldest unread ones.
 
 Opening an article queues it to be marked read on the server.
 
@@ -25,7 +26,7 @@ Opening an article queues it to be marked read on the server.
 
 ## Behaviour
 
-- At most 200 articles are cached (`MAX_CACHED_ITEMS` in `main.lua`). When there are more unread articles on the server, the newest are downloaded and the sync summary reports how many were skipped.
+- At most **Cache size** articles are cached. When there are more unread articles on the server, the newest are downloaded and the sync summary reports how many were skipped. A large cache makes the first sync longer, since articles are downloaded 50 at a time.
 - Articles are fetched in batches of 50, which is the FreshRSS per-request maximum.
 - A failed sync never deletes cached articles or queued reads. A failed batch is retried on the next sync.
 - Both `https://` and `http://` server URLs are accepted. If you leave out the scheme, `https://` is added. With `http://` the API key and articles are sent unencrypted, and the login check says so.
@@ -44,7 +45,7 @@ Opening an article queues it to be marked read on the server.
 | `kofever.koplugin/kofever_html.lua` | HTML to plain text conversion |
 | `tests/run_tests.lua` | Offline test harness with a simulated FreshRSS server |
 
-Settings and cache are stored in KOReader's settings directory as `kofever_settings.lua` and `kofever_cache.lua`. Errors are written to KOReader's log (`crash.log`) with a `KOFever:` prefix.
+Settings and the cache index are stored in KOReader's settings directory as `kofever_settings.lua` and `kofever_cache.lua`. Article text is stored separately, one file per article, in the `kofever_articles` folder next to them, so the index stays small even with a large cache. Caches from earlier versions, which kept the text in the index, are converted automatically. Errors are written to KOReader's log (`crash.log`) with a `KOFever:` prefix.
 
 ## Running the tests
 

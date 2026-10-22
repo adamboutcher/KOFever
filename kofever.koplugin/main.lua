@@ -13,6 +13,7 @@ local LuaSettings = require("luasettings")
 local Menu = require("ui/widget/menu")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
 local NetworkMgr = require("ui/network/manager")
+local SpinWidget = require("ui/widget/spinwidget")
 local TextViewer = require("ui/widget/textviewer")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
@@ -28,20 +29,27 @@ local FeverHtml = require("kofever_html")
 local FeverStore = require("kofever_store")
 local FeverSync = require("kofever_sync")
 
--- Maximum number of articles kept in the local cache.
-local MAX_CACHED_ITEMS = 200
+-- Number of articles kept in the local cache: user selectable within these bounds.
+local DEFAULT_CACHE_SIZE = 200
+local MIN_CACHE_SIZE = 50
+local MAX_CACHE_SIZE = 3000
+local CACHE_SIZE_STEP = 50
 -- Feed names longer than this are shortened in the article list.
 local MAX_FEED_TITLE_CHARS = 24
 
 local SETTINGS_FILE = "kofever_settings.lua"
 local CACHE_FILE = "kofever_cache.lua"
+local TEXT_DIR = "kofever_articles"
 
 -- Shared by every plugin instance (file manager and reader), loaded on first use.
 local shared_store
 
 local function getStore()
     if not shared_store then
-        shared_store = FeverStore:new{ file = DataStorage:getSettingsDir() .. "/" .. CACHE_FILE }
+        shared_store = FeverStore:new{
+            file = DataStorage:getSettingsDir() .. "/" .. CACHE_FILE,
+            text_dir = DataStorage:getSettingsDir() .. "/" .. TEXT_DIR,
+        }
     end
     return shared_store
 end
@@ -109,6 +117,16 @@ When off, articles disappear from the list once opened and are removed from the 
                 end,
             },
             {
+                text_func = function()
+                    return T(_("Cache size: %1 articles"), self:getCacheSize())
+                end,
+                help_text = _("The maximum number of articles kept on the device. When there are more unread articles on the server, the newest are downloaded. Reducing the size removes read articles first, then the oldest unread ones."),
+                keep_menu_open = true,
+                callback = function(touchmenu_instance)
+                    self:showCacheSizeDialog(touchmenu_instance)
+                end,
+            },
+            {
                 text = _("Server login"),
                 keep_menu_open = true,
                 callback = function()
@@ -123,6 +141,35 @@ function KOFever:isConfigured()
     local server = self.settings:readSetting("server")
     local api_key = self.settings:readSetting("api_key")
     return server and server ~= "" and api_key and api_key ~= ""
+end
+
+function KOFever:getCacheSize()
+    return self.settings:readSetting("cache_size") or DEFAULT_CACHE_SIZE
+end
+
+function KOFever:showCacheSizeDialog(touchmenu_instance)
+    UIManager:show(SpinWidget:new{
+        title_text = _("Cache size"),
+        info_text = _("Maximum number of articles kept on the device."),
+        value = self:getCacheSize(),
+        value_min = MIN_CACHE_SIZE,
+        value_max = MAX_CACHE_SIZE,
+        value_step = CACHE_SIZE_STEP,
+        value_hold_step = CACHE_SIZE_STEP * 10,
+        default_value = DEFAULT_CACHE_SIZE,
+        callback = function(spin)
+            self.settings:saveSetting("cache_size", spin.value)
+            self.settings:flush()
+            -- Apply a smaller limit straight away so the space is freed now.
+            local store = getStore()
+            if store:applyLimit(spin.value) > 0 then
+                store:save()
+            end
+            if touchmenu_instance then
+                touchmenu_instance:updateItems()
+            end
+        end,
+    })
 end
 
 function KOFever:showReadArticles()
@@ -289,7 +336,7 @@ function KOFever:runSync()
     end
 
     local call_ok, finished, summary, err = pcall(FeverSync.run, self:getClient(), getStore(), {
-        max_items = MAX_CACHED_ITEMS,
+        max_items = self:getCacheSize(),
         keep_read = self:showReadArticles(),
         html = FeverHtml,
         progress = progress,
@@ -378,6 +425,15 @@ function KOFever:openArticle(id)
         self:showMessage(_("This article is no longer in the cache. Run Sync now."))
         return
     end
+    local text = store:getText(id)
+    if not text then
+        -- The text file is gone, so drop the entry: the next sync downloads it again if it is still unread.
+        logger.warn("KOFever: text file missing for article", id)
+        store:removeItem(id)
+        store:save()
+        self:showMessage(_("This article's text is missing from the cache. Run Sync now to download it again."))
+        return
+    end
     store:markOpened(id)
 
     local parts = { store:getFeedTitle(item.feed_id) or _("Unknown feed"), "" }
@@ -385,7 +441,7 @@ function KOFever:openArticle(id)
         table.insert(parts, item.url)
         table.insert(parts, "")
     end
-    table.insert(parts, item.text ~= "" and item.text or _("(This article has no text.)"))
+    table.insert(parts, text ~= "" and text or _("(This article has no text.)"))
 
     UIManager:show(TextViewer:new{
         title = item.title,
