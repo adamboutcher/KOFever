@@ -34,8 +34,6 @@ local DEFAULT_CACHE_SIZE = 200
 local MIN_CACHE_SIZE = 50
 local MAX_CACHE_SIZE = 3000
 local CACHE_SIZE_STEP = 50
--- Feed names longer than this are shortened in the article list.
-local MAX_FEED_TITLE_CHARS = 24
 
 local SETTINGS_FILE = "kofever_settings.lua"
 local CACHE_FILE = "kofever_cache.lua"
@@ -54,12 +52,19 @@ local function getStore()
     return shared_store
 end
 
-local function shorten(text, max_chars)
-    local chars = util.splitToChars(text)
-    if #chars <= max_chars then
-        return text
+-- FreshRSS's Fever API swaps these for full-width look-alikes (see escapeToUnicodeAlternative in
+-- FreshRSS), which some e-reader fonts render poorly. Show the plain characters instead.
+local FULLWIDTH_TO_ASCII = {
+    ["\239\188\134"] = "&", -- U+FF06
+    ["\239\188\156"] = "<", -- U+FF1C
+    ["\239\188\158"] = ">", -- U+FF1E
+}
+
+local function displayTitle(text)
+    if not text then
+        return nil
     end
-    return table.concat(chars, "", 1, max_chars - 1) .. "…"
+    return (text:gsub("\239\188[\134\156\158]", FULLWIDTH_TO_ASCII))
 end
 
 local function errorMessage(err)
@@ -388,13 +393,13 @@ function KOFever:showArticleList()
     local function articleTable(items)
         local item_table = {}
         for _, item in ipairs(items) do
-            local feed_title = store:getFeedTitle(item.feed_id)
+            local feed_title = displayTitle(store:getFeedTitle(item.feed_id))
             local article_id = item.id
             table.insert(item_table, {
-                text = item.title,
+                text = displayTitle(item.title),
                 -- With read articles shown, unread titles are bold and read titles normal weight.
                 bold = show_read and not item.read,
-                mandatory = feed_title and shorten(feed_title, MAX_FEED_TITLE_CHARS) or nil,
+                mandatory = feed_title,
                 callback = function()
                     UIManager:close(menu)
                     self:openArticle(article_id)
@@ -457,7 +462,7 @@ function KOFever:showArticleList()
     end
     addCategory(_("All articles"), all_items, countUnread(all_items))
     for _, category in ipairs(categories) do
-        local name = category.title
+        local name = displayTitle(category.title)
         if not category.id then
             name = _("Uncategorised")
         elseif not name or name == "" then
@@ -504,7 +509,7 @@ function KOFever:openArticle(id)
     end
     store:markOpened(id)
 
-    local parts = { store:getFeedTitle(item.feed_id) or _("Unknown feed"), "" }
+    local parts = { displayTitle(store:getFeedTitle(item.feed_id)) or _("Unknown feed"), "" }
     if item.url then
         table.insert(parts, item.url)
         table.insert(parts, "")
@@ -512,7 +517,7 @@ function KOFever:openArticle(id)
     table.insert(parts, text ~= "" and text or _("(This article has no text.)"))
 
     UIManager:show(TextViewer:new{
-        title = item.title,
+        title = displayTitle(item.title),
         title_multilines = true,
         text = table.concat(parts, "\n"),
         text_type = "general",
