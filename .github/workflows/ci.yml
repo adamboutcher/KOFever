@@ -30,6 +30,10 @@ jobs:
       - name: Lint
         run: luacheck kofever.koplugin tests
 
+      # release.yml replaces this line with the release tag.
+      - name: Check version placeholder
+        run: grep -q '^local version = "dev"$' kofever.koplugin/_meta.lua
+
       - name: Run tests
         env:
           KOREADER_BASE: koreader-base
