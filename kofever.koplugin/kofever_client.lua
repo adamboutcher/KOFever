@@ -119,24 +119,46 @@ function FeverClient:checkAuth()
     return self:request("")
 end
 
---- Fetches feed titles.
+--- Fetches feed titles and the categories (Fever "groups") they belong to, in one request.
 -- @treturn bool success
--- @treturn table map of feed ID (string) to title, or an error table
-function FeverClient:getFeedTitles()
-    local ok, data = self:request("feeds")
+-- @treturn table `{ feed_titles, group_titles, feed_groups }`, or an error table.
+-- `feed_titles` maps feed ID to title. `group_titles` maps group ID to title and
+-- `feed_groups` maps feed ID to an array of group IDs; both are nil if the server sent no groups.
+function FeverClient:getFeeds()
+    local ok, data = self:request("groups&feeds")
     if not ok then return false, data end
     if type(data.feeds) ~= "table" then
         logger.warn("KOFever: feeds response has no feeds list")
         return false, { kind = "json", detail = "missing feeds" }
     end
-    local titles = {}
+    local result = { feed_titles = {} }
     for _, feed in ipairs(data.feeds) do
         local id = FeverClient.idToString(feed.id)
         if id then
-            titles[id] = type(feed.title) == "string" and feed.title or ""
+            result.feed_titles[id] = type(feed.title) == "string" and feed.title or ""
         end
     end
-    return true, titles
+
+    if type(data.groups) == "table" and type(data.feeds_groups) == "table" then
+        result.group_titles = {}
+        for _, group in ipairs(data.groups) do
+            local id = FeverClient.idToString(group.id)
+            if id then
+                result.group_titles[id] = type(group.title) == "string" and group.title or ""
+            end
+        end
+        result.feed_groups = {}
+        for _, link in ipairs(data.feeds_groups) do
+            local group_id = FeverClient.idToString(link.group_id)
+            if group_id and type(link.feed_ids) == "string" then
+                for feed_id in link.feed_ids:gmatch("%d+") do
+                    result.feed_groups[feed_id] = result.feed_groups[feed_id] or {}
+                    table.insert(result.feed_groups[feed_id], group_id)
+                end
+            end
+        end
+    end
+    return true, result
 end
 
 --- Fetches the IDs of every unread item.

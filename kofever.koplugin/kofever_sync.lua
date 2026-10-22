@@ -85,11 +85,14 @@ function Sync.run(client, store, opts)
         store:save()
     end
 
-    -- 2. Refresh feed names. Keep the old ones on failure.
+    -- 2. Refresh feed names and categories. Keep the old ones on failure.
     progress("feeds")
-    local feeds_ok, titles = client:getFeedTitles()
+    local feeds_ok, feeds = client:getFeeds()
     if feeds_ok then
-        store:setFeedTitles(titles)
+        store:setFeedTitles(feeds.feed_titles)
+        if feeds.feed_groups then
+            store:setGroups(feeds.group_titles, feeds.feed_groups)
+        end
     else
         summary.feeds_failed = true
     end
