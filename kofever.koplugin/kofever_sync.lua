@@ -40,7 +40,8 @@ end
 --- Runs a full sync.
 -- @tparam FeverClient client
 -- @tparam Store store
--- @tparam table opts `{ max_items = int, html = kofever_html, progress = function(stage, current, total) }`
+-- @tparam table opts `{ max_items = int, keep_read = bool, html = kofever_html, progress = function(stage, current, total) }`
+-- With `keep_read`, articles that are read on the server stay cached (flagged read) until the cache limit drops them.
 -- @treturn bool true if the sync reached the end, false if it was aborted
 -- @treturn table summary `{ pushed, push_failed, new, failed_batches, removed, dropped, not_downloaded, feeds_failed }`
 -- @treturn table|nil error table from the client when aborted
@@ -106,11 +107,16 @@ function Sync.run(client, store, opts)
     end
 
     -- 4. Prune articles that are no longer unread on the server, unless their read is still queued.
+    -- When read articles are kept, they are only flagged read and the cache limit removes them later.
     local pending_set = store:pendingSet()
     for id, item in pairs(store.items) do
         if not unread_set[id] and not pending_set[id] then
-            store:removeItem(id)
-            summary.removed = summary.removed + 1
+            if opts.keep_read then
+                item.read = true
+            else
+                store:removeItem(id)
+                summary.removed = summary.removed + 1
+            end
         elseif unread_set[id] and item.read and not pending_set[id] then
             -- Our read was sent but the server lists it as unread again (for example it was
             -- marked unread in the web interface). The server wins.

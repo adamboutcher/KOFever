@@ -131,8 +131,8 @@ function Store:getSortedItems(include_read)
     return list
 end
 
---- Drops the oldest articles until at most `max_items` remain.
--- Articles waiting in `pending_reads` are never dropped.
+--- Drops articles until at most `max_items` remain: read articles first, then unread,
+-- oldest first within each group. Articles waiting in `pending_reads` are never dropped.
 -- @treturn int number of articles dropped
 function Store:applyLimit(max_items)
     local count = self:itemCount()
@@ -147,6 +147,9 @@ function Store:applyLimit(max_items)
         end
     end
     table.sort(candidates, function(a, b)
+        if (a.read or false) ~= (b.read or false) then
+            return a.read == true
+        end
         if a.created ~= b.created then
             return (a.created or 0) < (b.created or 0)
         end
