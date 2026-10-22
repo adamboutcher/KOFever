@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out KOFever
+        uses: actions/checkout@v4
+
+      # The tests use the real MD5 implementation from koreader-base.
+      - name: Check out ffi/sha2.lua from koreader-base
+        uses: actions/checkout@v4
+        with:
+          repository: koreader/koreader-base
+          ref: 51d5eec06b413a1deefb4c4786253d03c349dcf2
+          path: koreader-base
+          sparse-checkout: ffi/sha2.lua
+          sparse-checkout-cone-mode: false
+
+      - name: Install LuaJIT, luacheck and dkjson
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y luajit lua-check lua-dkjson
+
+      - name: Lint
+        run: luacheck kofever.koplugin tests
+
+      - name: Run tests
+        env:
+          KOREADER_BASE: koreader-base
+        run: luajit tests/run_tests.lua

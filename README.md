@@ -11,20 +11,24 @@ A KOReader plugin that syncs unread articles from a FreshRSS server using the Fe
 
 ## Usage
 
-The plugin adds a **KOFever** entry to the Tools menu with three items:
+The plugin adds a **KOFever** entry to the Tools menu with these items:
 
 - **Server login**: enter the server URL (for example `https://rss.example.com`), your FreshRSS username and the API password. Only the Fever API key (MD5 of `username:apipassword`) is stored; the password itself is never saved. If the device is online, the login is checked straight away.
 - **Sync now**: turns Wi-Fi on if needed, sends any reads queued offline, then downloads unread articles.
-- **Browse unread articles**: lists cached unread articles, newest first, with the feed name on the right. Tap an article to read it as plain text.
+- **Browse unread articles** (or **Browse articles** when read articles are shown): lists cached articles, newest first, with the feed name on the right. Tap an article to read it as plain text.
+- **Show read articles**: a checkbox, off by default. See below.
 
-Opening an article hides it from the list and queues it to be marked read on the server. The article stays in the cache until the server confirms the read, so it can be reopened offline in the meantime (set `SHOW_OPENED_ARTICLES = true` in `main.lua` to keep opened articles visible in the list with a "(read)" marker).
+Opening an article queues it to be marked read on the server.
+
+- With **Show read articles** off, an opened article disappears from the list. It stays in the cache until the server confirms the read, so it is not lost if the read has not been sent yet, and is removed at the next successful sync.
+- With **Show read articles** on, read articles stay in the list. Unread titles are shown in bold and read titles in normal weight. Articles read on the server (for example in the FreshRSS web interface) are also kept and shown as read. Read articles stay cached until the cache limit needs the space; when it does, read articles are removed before unread ones. If you have more unread articles on the server than the cache limit, read articles will therefore be removed at the next sync.
 
 ## Behaviour
 
 - At most 200 articles are cached (`MAX_CACHED_ITEMS` in `main.lua`). When there are more unread articles on the server, the newest are downloaded and the sync summary reports how many were skipped.
 - Articles are fetched in batches of 50, which is the FreshRSS per-request maximum.
 - A failed sync never deletes cached articles or queued reads. A failed batch is retried on the next sync.
-- Only HTTPS server URLs are accepted. If you leave out the scheme, `https://` is added.
+- Both `https://` and `http://` server URLs are accepted. If you leave out the scheme, `https://` is added. With `http://` the API key and articles are sent unencrypted, and the login check says so.
 - Changing the server URL clears the local cache and any queued reads, since article IDs belong to the old server.
 - Images are not shown. Image alt text, where present, is shown as `[Image: ...]`.
 
@@ -49,5 +53,7 @@ The tests stub the KOReader modules and simulate the FreshRSS Fever endpoint, so
 ```sh
 KOREADER_BASE=/path/to/koreader-base luajit tests/run_tests.lua
 ```
+
+The same lint and tests run on GitHub Actions for every pull request and every push to `main` (`.github/workflows/ci.yml`). To lint locally, run `luacheck kofever.koplugin tests` from the repository root.
 
 The tests cover the sync algorithm, cache limit, offline read queue and HTML conversion. They do not exercise the KOReader UI or real network code, so the device testing steps in the plan still apply.

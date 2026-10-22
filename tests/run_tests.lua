@@ -232,4 +232,41 @@ ok, summary = sync(client, store)
 client.getItems = real_getItems
 pass("failed batch counted, items kept", ok and summary.failed_batches == 1 and store:itemCount() >= before - 1)
 
+-- Keeping read articles
+local keep_store = FeverStore:new{ file = "keep_cache" }
+local function syncKeep()
+    -- A large limit, so the cache limit does not interfere with these checks.
+    return FeverSync.run(client, keep_store, { max_items = 1000, keep_read = true, html = FeverHtml })
+end
+ok = syncKeep()
+local unread_total = countUnread()
+pass("keep_read sync ok", ok and keep_store:itemCount() == unread_total)
+local read_id = keep_store:getSortedItems(false)[1].id
+keep_store:markOpened(read_id)
+pass("opened article listed when read shown", #keep_store:getSortedItems(true) == unread_total
+    and #keep_store:getSortedItems(false) == unread_total - 1)
+ok, summary = syncKeep()
+pass("read pushed but article kept", ok and summary.pushed == 1 and keep_store:getItem(read_id) ~= nil and keep_store:getItem(read_id).read)
+local web_read = keep_store:getSortedItems(false)[1].id
+server.unread[web_read] = nil
+syncKeep()
+pass("web-read article kept and flagged read", keep_store:getItem(web_read) ~= nil and keep_store:getItem(web_read).read == true)
+server.unread[web_read] = true
+syncKeep()
+pass("marked unread on server clears read flag", keep_store:getItem(web_read).read == nil)
+
+-- Cache limit drops read articles before unread ones, even newer read ones
+local limit_store = FeverStore:new{ file = "limit_cache" }
+for i = 1, 6 do
+    limit_store:putItem({ id = tostring(i), title = "t", text = "", created = i, read = (i >= 5) or nil })
+end
+local dropped = limit_store:applyLimit(4)
+pass("limit drops read first", dropped == 2 and limit_store:getItem("5") == nil and limit_store:getItem("6") == nil
+    and limit_store:getItem("1") ~= nil)
+limit_store:putItem({ id = "7", title = "t", text = "", created = 7, read = true })
+limit_store:markOpened("7")
+dropped = limit_store:applyLimit(3)
+pass("limit then drops oldest unread, keeps pending", dropped == 2 and limit_store:getItem("7") ~= nil
+    and limit_store:getItem("1") == nil and limit_store:getItem("2") == nil)
+
 print("all tests passed")

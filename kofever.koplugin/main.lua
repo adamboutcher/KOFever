@@ -30,8 +30,6 @@ local FeverSync = require("kofever_sync")
 
 -- Maximum number of articles kept in the local cache.
 local MAX_CACHED_ITEMS = 200
--- When true, opened articles stay in the list with a marker instead of disappearing.
-local SHOW_OPENED_ARTICLES = false
 -- Feed names longer than this are shortened in the article list.
 local MAX_FEED_TITLE_CHARS = 24
 
@@ -90,9 +88,24 @@ function KOFever:addToMainMenu(menu_items)
                 end,
             },
             {
-                text = _("Browse unread articles"),
+                text_func = function()
+                    return self:showReadArticles() and _("Browse articles") or _("Browse unread articles")
+                end,
                 callback = function()
                     self:showArticleList()
+                end,
+            },
+            {
+                text = _("Show read articles"),
+                help_text = _([[Keep read articles in the list, with unread titles in bold and read titles in normal weight. Read articles stay cached until the cache limit removes them, oldest first.
+
+When off, articles disappear from the list once opened and are removed from the cache once the server confirms they are read.]]),
+                checked_func = function()
+                    return self:showReadArticles()
+                end,
+                callback = function()
+                    self.settings:saveSetting("show_read_articles", not self:showReadArticles())
+                    self.settings:flush()
                 end,
             },
             {
@@ -110,6 +123,10 @@ function KOFever:isConfigured()
     local server = self.settings:readSetting("server")
     local api_key = self.settings:readSetting("api_key")
     return server and server ~= "" and api_key and api_key ~= ""
+end
+
+function KOFever:showReadArticles()
+    return self.settings:isTrue("show_read_articles")
 end
 
 function KOFever:getClient()
@@ -203,8 +220,8 @@ function KOFever:saveLogin(server, username, api_password)
     if not server:match("^%a[%w+.-]*://") then
         server = "https://" .. server
     end
-    if not server:match("^https://") then
-        self:showMessage(_("The server URL must start with https://"))
+    if not server:match("^https?://[^/]") then
+        self:showMessage(_("The server URL must start with https:// or http://"))
         return false
     end
 
@@ -222,8 +239,12 @@ function KOFever:saveLogin(server, username, api_password)
 end
 
 function KOFever:verifyLogin()
+    local note = ""
+    if self.settings:readSetting("server"):match("^http://") then
+        note = "\n\n" .. _("Note: this server uses plain http, so the API key and articles are sent unencrypted.")
+    end
     if not NetworkMgr:isOnline() then
-        self:showMessage(_("Login saved. It will be checked at the next sync."))
+        self:showMessage(_("Login saved. It will be checked at the next sync.") .. note)
         return
     end
     self:showProgress(_("Checking login…"))
@@ -233,11 +254,11 @@ function KOFever:verifyLogin()
     self:closeProgress()
     if not call_ok then
         logger.err("KOFever: login check failed:", ok)
-        self:showMessage(_("Login saved, but the check failed unexpectedly. See the log for details."))
+        self:showMessage(_("Login saved, but the check failed unexpectedly. See the log for details.") .. note)
     elseif ok then
-        self:showMessage(_("Login saved and accepted by the server."), 3)
+        self:showMessage(_("Login saved and accepted by the server.") .. note, note == "" and 3 or nil)
     else
-        self:showMessage(_("Login saved, but it could not be confirmed:") .. "\n" .. errorMessage(err))
+        self:showMessage(_("Login saved, but it could not be confirmed:") .. "\n" .. errorMessage(err) .. note)
     end
 end
 
@@ -269,6 +290,7 @@ function KOFever:runSync()
 
     local call_ok, finished, summary, err = pcall(FeverSync.run, self:getClient(), getStore(), {
         max_items = MAX_CACHED_ITEMS,
+        keep_read = self:showReadArticles(),
         html = FeverHtml,
         progress = progress,
     })
@@ -309,14 +331,21 @@ end
 
 function KOFever:showArticleList()
     local store = getStore()
-    local items = store:getSortedItems(SHOW_OPENED_ARTICLES)
+    local show_read = self:showReadArticles()
+    local items = store:getSortedItems(show_read)
     local menu
     local item_table = {}
+    local unread_count = 0
     for _, item in ipairs(items) do
         local feed_title = store:getFeedTitle(item.feed_id)
         local article_id = item.id
+        if not item.read then
+            unread_count = unread_count + 1
+        end
         table.insert(item_table, {
-            text = item.read and T(_("(read) %1"), item.title) or item.title,
+            text = item.title,
+            -- With read articles shown, unread titles are bold and read titles normal weight.
+            bold = show_read and not item.read,
             mandatory = feed_title and shorten(feed_title, MAX_FEED_TITLE_CHARS) or nil,
             callback = function()
                 UIManager:close(menu)
@@ -326,13 +355,13 @@ function KOFever:showArticleList()
     end
     if #item_table == 0 then
         table.insert(item_table, {
-            text = _("No unread articles. Run Sync now."),
+            text = show_read and _("No articles. Run Sync now.") or _("No unread articles. Run Sync now."),
             select_enabled = false,
         })
     end
 
     menu = Menu:new{
-        title = _("Unread articles"),
+        title = show_read and T(_("Articles (%1 unread)"), unread_count) or _("Unread articles"),
         item_table = item_table,
         covers_fullscreen = true,
         is_borderless = true,
