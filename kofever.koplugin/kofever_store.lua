@@ -7,6 +7,8 @@ The index is a LuaSettings file (`file`) holding:
   `{ id, title, url, feed_id, created, read }`. `read` is set locally when
   the article is opened, so it can be hidden from the list but still reopened offline.
 - `feed_titles`: table keyed by feed ID string.
+- `group_titles`: category (Fever group) titles keyed by group ID string.
+- `feed_groups`: arrays of group ID strings keyed by feed ID string.
 - `pending_reads`: array of article ID strings opened locally but not yet marked read on the server.
 
 Article text is kept out of the index, one file per article in `text_dir`, so the index
@@ -34,6 +36,8 @@ function Store:load()
     self.settings = LuaSettings:open(self.file)
     self.items = self.settings:readSetting("items", {})
     self.feed_titles = self.settings:readSetting("feed_titles", {})
+    self.group_titles = self.settings:readSetting("group_titles", {})
+    self.feed_groups = self.settings:readSetting("feed_groups", {})
     self.pending_reads = self.settings:readSetting("pending_reads", {})
     if lfs.attributes(self.text_dir, "mode") ~= "directory" then
         lfs.mkdir(self.text_dir)
@@ -98,6 +102,8 @@ end
 function Store:save()
     self.settings:saveSetting("items", self.items)
     self.settings:saveSetting("feed_titles", self.feed_titles)
+    self.settings:saveSetting("group_titles", self.group_titles)
+    self.settings:saveSetting("feed_groups", self.feed_groups)
     self.settings:saveSetting("pending_reads", self.pending_reads)
     self.settings:flush()
 end
@@ -109,6 +115,8 @@ function Store:clear()
     end
     self.items = {}
     self.feed_titles = {}
+    self.group_titles = {}
+    self.feed_groups = {}
     self.pending_reads = {}
     self:save()
 end
@@ -123,6 +131,54 @@ end
 
 function Store:setFeedTitles(titles)
     self.feed_titles = titles
+end
+
+function Store:setGroups(group_titles, feed_groups)
+    self.group_titles = group_titles
+    self.feed_groups = feed_groups
+end
+
+--- Groups cached articles by category for browsing.
+-- An article is listed under every category its feed belongs to. Articles whose feed has
+-- no known category are collected in one bucket with `id = nil`, sorted last.
+-- @bool include_read also include articles opened locally
+-- @treturn table array of `{ id, title, items, unread }`; `items` are sorted newest first
+function Store:getCategories(include_read)
+    local buckets, list = {}, {}
+    for _, item in ipairs(self:getSortedItems(include_read)) do
+        local group_ids = item.feed_id and self.feed_groups[item.feed_id]
+        if not group_ids or #group_ids == 0 then
+            group_ids = { false }
+        end
+        for _, group_id in ipairs(group_ids) do
+            local bucket = buckets[group_id]
+            if not bucket then
+                bucket = {
+                    id = group_id or nil,
+                    title = group_id and self.group_titles[group_id] or nil,
+                    items = {},
+                    unread = 0,
+                }
+                buckets[group_id] = bucket
+                table.insert(list, bucket)
+            end
+            table.insert(bucket.items, item)
+            if not item.read then
+                bucket.unread = bucket.unread + 1
+            end
+        end
+    end
+    table.sort(list, function(a, b)
+        if (a.id == nil) ~= (b.id == nil) then
+            return b.id == nil
+        end
+        local a_title, b_title = (a.title or ""):lower(), (b.title or ""):lower()
+        if a_title ~= b_title then
+            return a_title < b_title
+        end
+        return (a.id or "") < (b.id or "")
+    end)
+    return list
 end
 
 function Store:itemCount()

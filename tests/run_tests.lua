@@ -111,8 +111,15 @@ package.preload["socket.http"] = function()
         if params.api_key == server.key then
             resp.auth = 1
             resp.last_refreshed_on_time = 0
+            if params.groups then
+                resp.groups = { { id = 10, title = "Tech" }, { id = 20, title = "News" } }
+            end
             if params.feeds then
                 resp.feeds = { { id = 1, title = "Feed One" }, { id = 2, title = "Feed Two" }, { id = 3, title = "Feed Three" } }
+            end
+            if params.groups or params.feeds then
+                -- Feed 3 has no category; as in FreshRSS, feeds_groups comes with both flags.
+                resp.feeds_groups = { { group_id = 10, feed_ids = "1,2" }, { group_id = 20, feed_ids = "2" } }
             end
             if params.unread_item_ids then
                 local ids = {}
@@ -314,6 +321,31 @@ pass("old cache text migrated to file", old_store:getText("42") == "Old text" an
 pass("orphaned text file removed", not fileExists(textDir("old_cache") .. "/999.txt"))
 old_store:clear()
 pass("clear removes text files", not fileExists(old_store:textPath("42")) and old_store:itemCount() == 0)
+
+-- Categories
+pass("group titles stored", store.group_titles["10"] == "Tech" and store.group_titles["20"] == "News")
+pass("feed groups stored", #store.feed_groups["2"] == 2 and store.feed_groups["3"] == nil)
+local categories = store:getCategories(false)
+pass("three category buckets", #categories == 3)
+pass("categories sorted by title, uncategorised last", categories[1].title == "News" and categories[2].title == "Tech"
+    and categories[3].id == nil)
+local by_feed = { 0, 0, 0 }
+for _, item in ipairs(store:getSortedItems(false)) do
+    local f = tonumber(item.feed_id)
+    by_feed[f] = by_feed[f] + 1
+end
+pass("article in two categories counted in both", #categories[1].items == by_feed[2]
+    and #categories[2].items == by_feed[1] + by_feed[2] and #categories[3].items == by_feed[3])
+pass("category unread counts", categories[2].unread == #categories[2].items)
+local first_tech = categories[2].items[1]
+pass("category items newest first", first_tech.created >= categories[2].items[#categories[2].items].created)
+store:markOpened(first_tech.id)
+pass("opened article leaves category when read hidden", #store:getCategories(false)[2].items == #categories[2].items - 1)
+local with_read = store:getCategories(true)
+pass("opened article counted as read when shown", #with_read[2].items == #categories[2].items
+    and with_read[2].unread == categories[2].unread - 1)
+store = newStore()
+pass("categories persisted", store.group_titles["10"] == "Tech" and #store.feed_groups["2"] == 2)
 
 os.execute("rm -rf '" .. TMP .. "'")
 print("all tests passed")

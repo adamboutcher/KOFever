@@ -15,7 +15,7 @@ The plugin adds a **KOFever** entry to the Tools menu with these items:
 
 - **Server login**: enter the server URL (for example `https://rss.example.com`), your FreshRSS username and the API password. Only the Fever API key (MD5 of `username:apipassword`) is stored; the password itself is never saved. If the device is online, the login is checked straight away.
 - **Sync now**: turns Wi-Fi on if needed, sends any reads queued offline, then downloads unread articles.
-- **Browse unread articles** (or **Browse articles** when read articles are shown): lists cached articles, newest first, with the feed name on the right. Tap an article to read it as plain text.
+- **Browse unread articles** (or **Browse articles** when read articles are shown): shows your FreshRSS categories with the number of unread articles in each, plus an **All articles** entry at the top. Tap a category to list its articles, newest first, with the feed name on the right; tap an article to read it as plain text. The back arrow, the close button or the Back key returns to the category list. Articles from feeds without a category are under **Uncategorised**. If all cached articles are in one category, the category list is skipped.
 - **Show read articles**: a checkbox, off by default. See below.
 - **Cache size**: how many articles are kept on the device, from 50 to 3000 in steps of 50 (default 200). Hold the arrows to change it by 500 at a time. Lowering it removes articles straight away: read ones first, then the oldest unread ones.
 

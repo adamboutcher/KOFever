@@ -376,45 +376,113 @@ end
 
 -- Reading --------------------------------------------------------------------
 
+--- Shows cached articles. When they span more than one category, a category list comes first,
+-- with an "All articles" entry; tapping a category shows its articles and the back arrow returns.
 function KOFever:showArticleList()
     local store = getStore()
     local show_read = self:showReadArticles()
-    local items = store:getSortedItems(show_read)
+    local all_items = store:getSortedItems(show_read)
+    local categories = store:getCategories(show_read)
     local menu
-    local item_table = {}
-    local unread_count = 0
-    for _, item in ipairs(items) do
-        local feed_title = store:getFeedTitle(item.feed_id)
-        local article_id = item.id
-        if not item.read then
-            unread_count = unread_count + 1
+
+    local function articleTable(items)
+        local item_table = {}
+        for _, item in ipairs(items) do
+            local feed_title = store:getFeedTitle(item.feed_id)
+            local article_id = item.id
+            table.insert(item_table, {
+                text = item.title,
+                -- With read articles shown, unread titles are bold and read titles normal weight.
+                bold = show_read and not item.read,
+                mandatory = feed_title and shorten(feed_title, MAX_FEED_TITLE_CHARS) or nil,
+                callback = function()
+                    UIManager:close(menu)
+                    self:openArticle(article_id)
+                end,
+            })
         end
-        table.insert(item_table, {
-            text = item.title,
-            -- With read articles shown, unread titles are bold and read titles normal weight.
-            bold = show_read and not item.read,
-            mandatory = feed_title and shorten(feed_title, MAX_FEED_TITLE_CHARS) or nil,
-            callback = function()
-                UIManager:close(menu)
-                self:openArticle(article_id)
-            end,
-        })
-    end
-    if #item_table == 0 then
-        table.insert(item_table, {
-            text = show_read and _("No articles. Run Sync now.") or _("No unread articles. Run Sync now."),
-            select_enabled = false,
-        })
+        if #item_table == 0 then
+            table.insert(item_table, {
+                text = show_read and _("No articles. Run Sync now.") or _("No unread articles. Run Sync now."),
+                select_enabled = false,
+            })
+        end
+        return item_table
     end
 
-    menu = Menu:new{
-        title = show_read and T(_("Articles (%1 unread)"), unread_count) or _("Unread articles"),
-        item_table = item_table,
+    local function articlesTitle(name, unread)
+        return show_read and T(_("%1 (%2 unread)"), name, unread) or name
+    end
+
+    local function countUnread(items)
+        local unread = 0
+        for _, item in ipairs(items) do
+            if not item.read then
+                unread = unread + 1
+            end
+        end
+        return unread
+    end
+
+    local menu_options = {
         covers_fullscreen = true,
         is_borderless = true,
         is_popout = false,
         title_bar_fm_style = true,
     }
+
+    -- With one category or none (e.g. before the first sync that fetched categories), skip the category list.
+    if #categories <= 1 then
+        menu_options.title = articlesTitle(show_read and _("Articles") or _("Unread articles"), countUnread(all_items))
+        menu_options.item_table = articleTable(all_items)
+        menu = Menu:new(menu_options)
+        UIManager:show(menu)
+        return
+    end
+
+    local categories_title = _("Categories")
+    local category_table = {}
+    local function addCategory(name, items, unread)
+        local index = #category_table + 1
+        table.insert(category_table, {
+            text = name,
+            bold = show_read and unread > 0,
+            mandatory = tostring(unread),
+            callback = function()
+                -- Remember where we were so the back arrow can return to it.
+                table.insert(menu.paths, { index = index })
+                menu:switchItemTable(articlesTitle(name, unread), articleTable(items))
+            end,
+        })
+    end
+    addCategory(_("All articles"), all_items, countUnread(all_items))
+    for _, category in ipairs(categories) do
+        local name = category.title
+        if not category.id then
+            name = _("Uncategorised")
+        elseif not name or name == "" then
+            name = T(_("Category %1"), category.id)
+        end
+        addCategory(name, category.items, category.unread)
+    end
+
+    menu_options.title = categories_title
+    menu_options.item_table = category_table
+    menu_options.onReturn = function()
+        local path = table.remove(menu.paths)
+        if path then
+            menu:switchItemTable(categories_title, category_table, path.index)
+        end
+    end
+    -- The close button and the Back key go up to the category list before closing.
+    menu_options.onClose = function(menu_self)
+        if #menu_self.paths > 0 then
+            menu_self:onReturn()
+            return true
+        end
+        return Menu.onClose(menu_self)
+    end
+    menu = Menu:new(menu_options)
     UIManager:show(menu)
 end
 
