@@ -46,6 +46,31 @@ local function deepcopy(v)
     if type(v) ~= "table" then return v end
     local c = {} for k, x in pairs(v) do c[k] = deepcopy(x) end return c
 end
+-- Article text files go in a fresh temporary directory.
+local TMP = os.tmpname()
+os.remove(TMP)
+os.execute("mkdir -p '" .. TMP .. "'")
+local function textDir(name) return TMP .. "/" .. name end
+local function fileExists(path) local f = io.open(path, "rb") if f then f:close() return true end return false end
+package.preload["libs/libkoreader-lfs"] = function()
+    return {
+        attributes = function(path, what)
+            assert(what == "mode")
+            if os.execute("test -d '" .. path .. "'") == 0 then return "directory" end
+            return fileExists(path) and "file" or nil
+        end,
+        mkdir = function(path) return os.execute("mkdir '" .. path .. "'") == 0 end,
+        dir = function(path)
+            local names = { ".", ".." }
+            local p = io.popen("ls -1 '" .. path .. "'")
+            for name in p:lines() do table.insert(names, name) end
+            p:close()
+            local i = 0
+            return function() i = i + 1 return names[i] end
+        end,
+    }
+end
+
 package.preload["luasettings"] = function()
     local LS = {}
     LS.__index = LS
@@ -126,7 +151,7 @@ local FeverStore = require("kofever_store")
 local FeverSync = require("kofever_sync")
 
 local MAX = 100
-local function newStore() return FeverStore:new{ file = "cache" } end
+local function newStore() return FeverStore:new{ file = "cache", text_dir = textDir("cache") } end
 local function sync(client, store)
     return FeverSync.run(client, store, { max_items = MAX, html = FeverHtml })
 end
@@ -155,7 +180,8 @@ pass("oldest article not cached", store:getItem(string.format("%.0f", BASE_ID + 
 local first = store:getSortedItems(false)[1]
 pass("sorted newest first", first.created == 1700000000 + 130)
 pass("title entities decoded", first.title == "Article & 130")
-pass("html converted", first.text == "Body 130")
+pass("html converted", store:getText(first.id) == "Body 130")
+pass("text kept out of the index", disk["cache"].items[first.id].text == nil and first.text == nil)
 pass("feed title stored", store:getFeedTitle(first.feed_id) == "Feed Two")
 
 -- Read three articles offline
@@ -166,7 +192,7 @@ for i = 1, 3 do
     table.insert(opened, item.id)
 end
 pass("opened articles hidden", #store:getSortedItems(false) == 97)
-pass("opened articles still readable", store:getItem(opened[1]).text ~= "")
+pass("opened articles still readable", store:getText(opened[1]) ~= "")
 pass("three pending reads", #store:getPendingReads() == 3)
 
 -- Reload from disk (simulates restarting KOReader)
@@ -233,7 +259,7 @@ client.getItems = real_getItems
 pass("failed batch counted, items kept", ok and summary.failed_batches == 1 and store:itemCount() >= before - 1)
 
 -- Keeping read articles
-local keep_store = FeverStore:new{ file = "keep_cache" }
+local keep_store = FeverStore:new{ file = "keep_cache", text_dir = textDir("keep_cache") }
 local function syncKeep()
     -- A large limit, so the cache limit does not interfere with these checks.
     return FeverSync.run(client, keep_store, { max_items = 1000, keep_read = true, html = FeverHtml })
@@ -256,7 +282,7 @@ syncKeep()
 pass("marked unread on server clears read flag", keep_store:getItem(web_read).read == nil)
 
 -- Cache limit drops read articles before unread ones, even newer read ones
-local limit_store = FeverStore:new{ file = "limit_cache" }
+local limit_store = FeverStore:new{ file = "limit_cache", text_dir = textDir("limit_cache") }
 for i = 1, 6 do
     limit_store:putItem({ id = tostring(i), title = "t", text = "", created = i, read = (i >= 5) or nil })
 end
@@ -269,4 +295,25 @@ dropped = limit_store:applyLimit(3)
 pass("limit then drops oldest unread, keeps pending", dropped == 2 and limit_store:getItem("7") ~= nil
     and limit_store:getItem("1") == nil and limit_store:getItem("2") == nil)
 
+pass("dropped article's text file removed", not fileExists(limit_store:textPath("1")))
+pass("kept article's text file present", fileExists(limit_store:textPath("7")))
+
+-- Text files follow the index: pruned articles lose their file, clear removes everything
+pass("pruned article's text file removed", not fileExists(store:textPath(opened[1])))
+
+-- Migration from the old single-file format, and cleanup of orphaned text files
+disk["old_cache"] = { items = { ["42"] = { id = "42", title = "Old", text = "Old text", created = 1 } },
+    feed_titles = {}, pending_reads = {} }
+os.execute("mkdir -p '" .. textDir("old_cache") .. "'")
+local orphan = io.open(textDir("old_cache") .. "/999.txt", "wb")
+orphan:write("orphan")
+orphan:close()
+local old_store = FeverStore:new{ file = "old_cache", text_dir = textDir("old_cache") }
+pass("old cache text migrated to file", old_store:getText("42") == "Old text" and old_store:getItem("42").text == nil
+    and disk["old_cache"].items["42"].text == nil)
+pass("orphaned text file removed", not fileExists(textDir("old_cache") .. "/999.txt"))
+old_store:clear()
+pass("clear removes text files", not fileExists(old_store:textPath("42")) and old_store:itemCount() == 0)
+
+os.execute("rm -rf '" .. TMP .. "'")
 print("all tests passed")

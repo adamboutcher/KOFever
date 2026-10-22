@@ -1,20 +1,26 @@
 --[[--
-Local article cache for offline reading, backed by a LuaSettings file.
+Local article cache for offline reading.
 
-The file holds:
+The index is a LuaSettings file (`file`) holding:
 
 - `items`: table keyed by article ID string. Each value is
-  `{ id, title, url, feed_id, created, text, read }`. `read` is set locally when
+  `{ id, title, url, feed_id, created, read }`. `read` is set locally when
   the article is opened, so it can be hidden from the list but still reopened offline.
 - `feed_titles`: table keyed by feed ID string.
 - `pending_reads`: array of article ID strings opened locally but not yet marked read on the server.
+
+Article text is kept out of the index, one file per article in `text_dir`, so the index
+stays small and quick to rewrite even with a large cache.
 
 @module koplugin.kofever.store
 --]]
 
 local LuaSettings = require("luasettings")
+local lfs = require("libs/libkoreader-lfs")
 
 local Store = {}
+
+local TEXT_SUFFIX = ".txt"
 
 function Store:new(o)
     o = o or {}
@@ -29,6 +35,63 @@ function Store:load()
     self.items = self.settings:readSetting("items", {})
     self.feed_titles = self.settings:readSetting("feed_titles", {})
     self.pending_reads = self.settings:readSetting("pending_reads", {})
+    if lfs.attributes(self.text_dir, "mode") ~= "directory" then
+        lfs.mkdir(self.text_dir)
+    end
+
+    -- Earlier versions kept the text in the index: move it out to text files.
+    local migrated = false
+    for id, item in pairs(self.items) do
+        if item.text then
+            self:writeText(id, item.text)
+            item.text = nil
+            migrated = true
+        end
+    end
+    if migrated then
+        self:save()
+    end
+
+    -- Remove text files the index does not know about (left by an interrupted sync).
+    local known = {}
+    for id in pairs(self.items) do
+        known[self:textName(id)] = true
+    end
+    for name in lfs.dir(self.text_dir) do
+        if name:sub(-#TEXT_SUFFIX) == TEXT_SUFFIX and not known[name] then
+            os.remove(self.text_dir .. "/" .. name)
+        end
+    end
+end
+
+function Store:textName(id)
+    -- FreshRSS IDs are digits; anything else is made safe for a file name.
+    return (id:gsub("[^%w_-]", "_")) .. TEXT_SUFFIX
+end
+
+function Store:textPath(id)
+    return self.text_dir .. "/" .. self:textName(id)
+end
+
+function Store:writeText(id, text)
+    local file = io.open(self:textPath(id), "wb")
+    if not file then
+        return false
+    end
+    file:write(text or "")
+    file:close()
+    return true
+end
+
+--- Returns the article text, or nil if its file is missing.
+function Store:getText(id)
+    local file = io.open(self:textPath(id), "rb")
+    if not file then
+        return nil
+    end
+    local text = file:read("*a")
+    file:close()
+    return text
 end
 
 --- Writes the cache to disk.
@@ -41,6 +104,9 @@ end
 
 --- Empties the cache, including queued reads, and writes it to disk.
 function Store:clear()
+    for id in pairs(self.items) do
+        os.remove(self:textPath(id))
+    end
     self.items = {}
     self.feed_titles = {}
     self.pending_reads = {}
@@ -67,12 +133,16 @@ function Store:itemCount()
     return count
 end
 
+--- Adds an article. Its `text` field is written to its own file and not kept in the index.
 function Store:putItem(item)
+    self:writeText(item.id, item.text)
+    item.text = nil
     self.items[item.id] = item
 end
 
 function Store:removeItem(id)
     self.items[id] = nil
+    os.remove(self:textPath(id))
 end
 
 --- Returns a set (ID -> true) of IDs waiting to be marked read on the server.
@@ -160,7 +230,7 @@ function Store:applyLimit(max_items)
         if count <= max_items then
             break
         end
-        self.items[item.id] = nil
+        self:removeItem(item.id)
         count = count - 1
         dropped = dropped + 1
     end
