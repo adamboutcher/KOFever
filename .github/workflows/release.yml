@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Check out KOFever
+        uses: actions/checkout@v4
+
+      # The tag ends up in a Lua string and a file name, so keep it to safe characters.
+      - name: Check tag
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+            echo "Release tag '$TAG' may only contain letters, digits, '.', '_' and '-'." >&2
+            exit 1
+          fi
+
+      - name: Stamp version
+        run: |
+          sed -i "s|^local version = \"dev\"$|local version = \"$TAG\"|" kofever.koplugin/_meta.lua
+          grep -q "^local version = \"$TAG\"$" kofever.koplugin/_meta.lua
+
+      # The zip holds the kofever.koplugin folder, so it can be extracted straight into koreader/plugins/.
+      - name: Build zip
+        run: zip -r "KOFever-$TAG.zip" kofever.koplugin -x '*/.*'
+
+      - name: Attach zip to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" "KOFever-$TAG.zip" --clobber

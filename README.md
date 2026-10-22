@@ -5,9 +5,12 @@ A KOReader plugin that syncs unread articles from a FreshRSS server using the Fe
 ## Installation
 
 1. Enable the Fever API in FreshRSS and set an API password (FreshRSS: Settings > Profile > API management). This is separate from your normal login password.
-2. Connect the Kindle by USB.
-3. Copy the `kofever.koplugin` folder into `koreader/plugins/` on the device (usually `/mnt/us/koreader/plugins/`).
-4. Eject and restart KOReader.
+2. Download `KOFever-<version>.zip` from the latest [release](https://github.com/adamboutcher/KOFever/releases) and extract it. It contains the `kofever.koplugin` folder.
+3. Connect the Kindle by USB.
+4. Copy the `kofever.koplugin` folder into `koreader/plugins/` on the device (usually `/mnt/us/koreader/plugins/`). When updating, replace the old folder; your settings and cached articles are kept, since they live in KOReader's settings directory.
+5. Eject and restart KOReader.
+
+The installed version is shown in the plugin's description under Tools > More tools > Plugin management (`dev` for copies taken straight from the repository).
 
 ## Usage
 
@@ -55,6 +58,12 @@ The tests stub the KOReader modules and simulate the FreshRSS Fever endpoint, so
 KOREADER_BASE=/path/to/koreader-base luajit tests/run_tests.lua
 ```
 
-The same lint and tests run on GitHub Actions for every pull request and every push to `main` (`.github/workflows/ci.yml`). To lint locally, run `luacheck kofever.koplugin tests` from the repository root.
-
 The tests cover the sync algorithm, cache limit, offline read queue and HTML conversion. They do not exercise the KOReader UI or real network code, so the device testing steps in the plan still apply.
+
+## Releases
+
+Publishing a GitHub release runs `.github/workflows/release.yml`, which stamps the release tag into `_meta.lua`, zips the `kofever.koplugin` folder as `KOFever-<tag>.zip` and attaches it to the release. Tags may only contain letters, digits, `.`, `_` and `-` (for example `v1.0.0`).
+
+## Continuous integration
+
+Lint and the tests run on GitHub Actions for every pull request and every push to `main` (`.github/workflows/ci.yml`). To lint locally, run `luacheck kofever.koplugin tests` from the repository root.
