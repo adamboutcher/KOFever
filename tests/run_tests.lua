@@ -319,8 +319,14 @@ local old_store = FeverStore:new{ file = "old_cache", text_dir = textDir("old_ca
 pass("old cache text migrated to file", old_store:getText("42") == "Old text" and old_store:getItem("42").text == nil
     and disk["old_cache"].items["42"].text == nil)
 pass("orphaned text file removed", not fileExists(textDir("old_cache") .. "/999.txt"))
+local stray = io.open(textDir("old_cache") .. "/555.txt", "wb")
+stray:write("stray")
+stray:close()
 old_store:clear()
 pass("clear removes text files", not fileExists(old_store:textPath("42")) and old_store:itemCount() == 0)
+pass("clear removes text files the index does not know", not fileExists(textDir("old_cache") .. "/555.txt"))
+pass("clear empties queued reads and categories", #old_store:getPendingReads() == 0
+    and next(old_store.feed_groups) == nil and disk["old_cache"].items and next(disk["old_cache"].items) == nil)
 
 -- Categories
 pass("group titles stored", store.group_titles["10"] == "Tech" and store.group_titles["20"] == "News")

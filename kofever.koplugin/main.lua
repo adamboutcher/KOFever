@@ -7,6 +7,7 @@ made offline so they are marked read on the server at the next sync.
 @module koplugin.kofever
 --]]
 
+local ConfirmBox = require("ui/widget/confirmbox")
 local DataStorage = require("datastorage")
 local InfoMessage = require("ui/widget/infomessage")
 local LuaSettings = require("luasettings")
@@ -132,6 +133,14 @@ When off, articles disappear from the list once opened and are removed from the 
                 end,
             },
             {
+                text = _("Clear cache"),
+                help_text = _("Deletes every downloaded article and any reads not yet sent to the server. Nothing is changed on the server. Your login and settings are kept."),
+                keep_menu_open = true,
+                callback = function()
+                    self:confirmClearCache()
+                end,
+            },
+            {
                 text = _("Server login"),
                 keep_menu_open = true,
                 callback = function()
@@ -173,6 +182,24 @@ function KOFever:showCacheSizeDialog(touchmenu_instance)
             if touchmenu_instance then
                 touchmenu_instance:updateItems()
             end
+        end,
+    })
+end
+
+function KOFever:confirmClearCache()
+    local store = getStore()
+    local text = T(_("Delete all %1 downloaded articles from this device?\n\nNothing is changed on the server. Run Sync now to download unread articles again."), store:itemCount())
+    local pending = #store:getPendingReads()
+    if pending > 0 then
+        text = text .. "\n\n" .. T(_("%1 read articles have not been sent to the server yet. They will stay unread on the server."), pending)
+    end
+    UIManager:show(ConfirmBox:new{
+        text = text,
+        ok_text = _("Clear cache"),
+        ok_callback = function()
+            store:clear()
+            logger.info("KOFever: cache cleared by user")
+            self:showMessage(_("Cache cleared."), 3)
         end,
     })
 end

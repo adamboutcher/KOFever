@@ -109,9 +109,12 @@ function Store:save()
 end
 
 --- Empties the cache, including queued reads, and writes it to disk.
+-- Every text file in `text_dir` is removed, not only those the index knows about.
 function Store:clear()
-    for id in pairs(self.items) do
-        os.remove(self:textPath(id))
+    for name in lfs.dir(self.text_dir) do
+        if name:sub(-#TEXT_SUFFIX) == TEXT_SUFFIX then
+            os.remove(self.text_dir .. "/" .. name)
+        end
     end
     self.items = {}
     self.feed_titles = {}
