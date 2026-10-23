@@ -24,6 +24,7 @@ There is no build step. The `kofever.koplugin` folder is copied as-is into `kore
 | `.github/workflows/ci.yml` | Lint, version placeholder check and tests on every PR and push to `main`. |
 | `.github/workflows/release.yml` | On a published release: stamps the tag into `_meta.lua`, zips the plugin folder and attaches it. |
 | `.luacheckrc` | Lint settings, based on KOReader's own. |
+| `LICENSE` | AGPL-3.0, matching KOReader. Copied into the plugin folder in release zips. |
 
 ## Architecture rules
 

@@ -30,8 +30,11 @@ jobs:
           grep -q "^local version = \"$TAG\"$" kofever.koplugin/_meta.lua
 
       # The zip holds the kofever.koplugin folder, so it can be extracted straight into koreader/plugins/.
+      # The licence goes inside the plugin folder so it travels with every installed copy.
       - name: Build zip
-        run: zip -r "KOFever-$TAG.zip" kofever.koplugin -x '*/.*'
+        run: |
+          cp LICENSE kofever.koplugin/LICENSE
+          zip -r "KOFever-$TAG.zip" kofever.koplugin -x '*/.*'
 
       - name: Attach zip to the release
         env:
