@@ -20,6 +20,7 @@ The plugin adds a **KOFever** entry to the Tools menu with these items:
 - **Sync now**: turns Wi-Fi on if needed, sends any reads queued offline, then downloads unread articles.
 - **Browse unread articles** (or **Browse articles** when read articles are shown): shows your FreshRSS categories with the number of unread articles in each, plus an **All articles** entry at the top. Tap a category to list its articles, newest first, with the feed name on the right; tap an article to read it as plain text. Closing the article returns to the list on the same page, with the article you just read hidden (or shown as read). The back arrow, the close button or the Back key returns to the category list. Articles from feeds without a category are under **Uncategorised**. If all cached articles are in one category, the category list is skipped.
 - **Show read articles**: a checkbox, off by default. See below.
+- **Clear cache**: deletes every downloaded article and any reads not yet sent, after asking for confirmation (it warns if unsent reads would be lost). Nothing is changed on the server, and your login and settings are kept. Run **Sync now** afterwards to download unread articles again.
 - **Cache size**: how many articles are kept on the device, from 50 to 3000 in steps of 50 (default 200). Hold the arrows to change it by 500 at a time. Lowering it removes articles straight away: read ones first, then the oldest unread ones.
 
 Opening an article queues it to be marked read on the server.
