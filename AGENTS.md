@@ -1,6 +1,8 @@
 # AGENTS.md
 
-Guidance for AI coding agents and new contributors working on KOFever. Read `README.md` first for what the plugin does from a user's point of view; this file covers how the code is put together and what to watch out for when changing it.
+> **Agents: read `README.md` in full as well as this file before making any change.** The two are written to be used together and neither repeats the other: `README.md` describes the plugin's user-facing behaviour (menu items, settings, sync and cache behaviour, installation and releases), which changes must preserve and keep documented; this file covers how the code is put together and what to watch out for when changing it.
+
+Guidance for AI coding agents and new contributors working on KOFever.
 
 ## What this is
 
