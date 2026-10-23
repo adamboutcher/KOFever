@@ -49,6 +49,7 @@ Opening an article queues it to be marked read on the server.
 | `kofever.koplugin/kofever_html.lua` | HTML to plain text conversion |
 | `tests/run_tests.lua` | Offline test harness with a simulated FreshRSS server |
 | `AGENTS.md` | Notes for contributors and AI coding agents: architecture, invariants, KOReader and FreshRSS quirks |
+| `LICENSE` | GNU Affero General Public License v3.0 |
 
 Settings and the cache index are stored in KOReader's settings directory as `kofever_settings.lua` and `kofever_cache.lua`. Article text is stored separately, one file per article, in the `kofever_articles` folder next to them, so the index stays small even with a large cache. Caches from earlier versions, which kept the text in the index, are converted automatically. Errors are written to KOReader's log (`crash.log`) with a `KOFever:` prefix.
 
@@ -65,6 +66,10 @@ The tests cover the sync algorithm, cache limit, offline read queue and HTML con
 ## Releases
 
 Publishing a GitHub release runs `.github/workflows/release.yml`, which stamps the release tag into `_meta.lua`, zips the `kofever.koplugin` folder as `KOFever-<tag>.zip` and attaches it to the release. Tags may only contain letters, digits, `.`, `_` and `-` (for example `v1.0.0`).
+
+## License
+
+KOFever is licensed under the [GNU Affero General Public License v3.0](LICENSE), the same licence as KOReader. A copy of the licence is included in each release zip.
 
 ## Continuous integration
 
