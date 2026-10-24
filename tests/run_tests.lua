@@ -99,9 +99,120 @@ local function parse(str, into)
     end
 end
 
+-- Google Reader side of the fake server, mirroring FreshRSS's p/api/greader.php.
+-- FreshRSS answers at <server>/api/greader.php; "mini.example.com" stands in for servers
+-- that answer at their root URL.
+local GREADER_BASES = { ["https://rss.example.com/api/greader.php"] = true, ["https://mini.example.com"] = true }
+local GREADER_USER, GREADER_PASS = "alice", "s3cr&t=x +"
+local GREADER_AUTH, GREADER_TOKEN = "alice/0123abcd", "tokenZZZZ"
+server.greader_calls = {}
+
+local function urlDecode(str)
+    return (str:gsub("+", " "):gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end))
+end
+
+-- Parses a query string or form body into key -> list of values.
+local function parseMulti(str)
+    local out = {}
+    for pair in (str or ""):gmatch("[^&]+") do
+        local k, v = pair:match("^([^=]+)=?(.*)$")
+        k, v = urlDecode(k), urlDecode(v)
+        out[k] = out[k] or {}
+        table.insert(out[k], v)
+    end
+    return out
+end
+
+local function sortedUnreadDesc()
+    local ids = {}
+    for id in pairs(server.unread) do table.insert(ids, id) end
+    table.sort(ids, function(a, b) return a > b end)
+    return ids
+end
+
+local function greaderHandler(req, path)
+    local query = parseMulti(req.url:match("%?(.*)$"))
+    local form = parseMulti(req.source and req.source() or "")
+    table.insert(server.greader_calls, { path = path, query = query, form = form })
+    local function one(t, k) return t[k] and t[k][1] end
+    if path == "/accounts/ClientLogin" then
+        if one(form, "Email") == GREADER_USER and one(form, "Passwd") == GREADER_PASS then
+            return 200, "SID=" .. GREADER_AUTH .. "\nLSID=null\nAuth=" .. GREADER_AUTH .. "\n"
+        end
+        return 401, "Unauthorized"
+    end
+    if (req.headers or {})["Authorization"] ~= "GoogleLogin auth=" .. GREADER_AUTH then
+        return 401, "Unauthorized"
+    end
+    if path == "/reader/api/0/token" then
+        return 200, GREADER_TOKEN .. "\n"
+    elseif path == "/reader/api/0/subscription/list" then
+        return 200, dkjson.encode{ subscriptions = {
+            { id = "feed/1", title = "Feed One", categories = { { id = "user/-/label/Tech", label = "Tech" } } },
+            { id = "feed/2", title = "Feed Two", categories = {
+                { id = "user/-/label/Tech", label = "Tech" }, { id = "user/-/label/News", label = "News" } } },
+            { id = "feed/3", title = "Feed Three", categories = {} },
+        } }
+    elseif path == "/reader/api/0/stream/items/ids" then
+        if server.greader_ids_hook then
+            return server.greader_ids_hook(query)
+        end
+        assert(one(query, "s") == "user/-/state/com.google/reading-list")
+        assert(one(query, "xt") == "user/-/state/com.google/read")
+        local n, c = tonumber(one(query, "n")), one(query, "c")
+        local refs, last = {}, nil
+        for _, id in ipairs(sortedUnreadDesc()) do
+            if (not c or id < c) and #refs < n then
+                table.insert(refs, { id = id })
+                last = id
+            end
+        end
+        return 200, dkjson.encode{ itemRefs = refs, continuation = (#refs >= n) and last or nil }
+    elseif path == "/reader/api/0/stream/items/contents" then
+        local items = {}
+        for _, id in ipairs(form.i or {}) do
+            local it = server.items[id]
+            if it then
+                local categories = { "user/-/state/com.google/reading-list" }
+                if not server.unread[id] then
+                    table.insert(categories, "user/-/state/com.google/read")
+                end
+                table.insert(items, {
+                    id = "tag:google.com,2005:reader/item/" .. string.format("%016x", tonumber(id)),
+                    title = it.title, published = it.created_on_time,
+                    canonical = { { href = it.url } }, summary = { content = it.html },
+                    origin = { streamId = "feed/" .. it.feed_id }, categories = categories,
+                })
+            end
+        end
+        return 200, dkjson.encode{ id = "user/-/state/com.google/reading-list", items = items }
+    elseif path == "/reader/api/0/edit-tag" then
+        if one(form, "T") ~= GREADER_TOKEN then
+            return 401, "Unauthorized"
+        end
+        if one(form, "a") == "user/-/state/com.google/read" then
+            for _, id in ipairs(form.i or {}) do server.unread[id] = nil end
+        end
+        return 200, "OK"
+    end
+    return 404, "Not Found"
+end
+
 package.preload["socket.http"] = function()
     return { request = function(req)
         if not server.online then return nil, "timeout" end
+        if not req.url:find("/api/fever.php", 1, true) then
+            local status, body = 404, "Not Found"
+            for greader_base in pairs(GREADER_BASES) do
+                if req.url:sub(1, #greader_base) == greader_base then
+                    local path = req.url:sub(#greader_base + 1):gsub("%?.*$", "")
+                    status, body = greaderHandler(req, path)
+                end
+            end
+            req.sink(body)
+            req.sink(nil)
+            return 1, status, {}, "HTTP/1.1 " .. status
+        end
         local params = {}
         parse(req.url:match("%?(.*)$"), params)
         local body = req.source()
@@ -352,6 +463,111 @@ pass("opened article counted as read when shown", #with_read[2].items == #catego
     and with_read[2].unread == categories[2].unread - 1)
 store = newStore()
 pass("categories persisted", store.group_titles["10"] == "Tech" and #store.feed_groups["2"] == 2)
+
+-- Google Reader API
+local GReaderClient = require("kofever_greader_client")
+local Http = require("kofever_http")
+pass("hexToDecimal small values", GReaderClient.hexToDecimal("0") == "0" and GReaderClient.hexToDecimal("ff") == "255")
+pass("hexToDecimal beyond 2^53 is exact", GReaderClient.hexToDecimal("ffffffffffffffff") == "18446744073709551615"
+    and GReaderClient.hexToDecimal("1234567890ABCDEF") == "1311768467294899695")
+pass("hexToDecimal keeps FreshRSS-sized IDs", GReaderClient.hexToDecimal("00060a2f3b4c5d6e") == "1700047834865006")
+pass("hexToDecimal rejects non-hex", GReaderClient.hexToDecimal("xyz") == nil and GReaderClient.hexToDecimal("") == nil)
+pass("long-form item ID converted", GReaderClient.itemIdToDecimal("tag:google.com,2005:reader/item/00060a24181e407b") == "1700000000000123"
+    and GReaderClient.itemIdToDecimal("1700000000000123") == "1700000000000123")
+pass("form encoding escapes reserved characters", Http.formEncode{ { "p", "a&b=c d+/" } } == "p=a%26b%3Dc%20d%2B%2F")
+
+local ok_login, login_err = GReaderClient.findEndpoint("https://rss.example.com", GREADER_USER, "wrong")
+pass("Google Reader wrong password is an auth error", not ok_login and login_err.kind == "auth")
+local base_url, auth
+ok_login, base_url, auth = GReaderClient.findEndpoint("https://rss.example.com", GREADER_USER, GREADER_PASS)
+pass("FreshRSS endpoint found and password with &, =, + and space sent intact",
+    ok_login and base_url == "https://rss.example.com/api/greader.php" and auth == GREADER_AUTH)
+local mini_ok, mini_base = GReaderClient.findEndpoint("https://mini.example.com", GREADER_USER, GREADER_PASS)
+pass("root-URL server endpoint found by falling back", mini_ok and mini_base == "https://mini.example.com")
+local direct_ok, direct_base = GReaderClient.findEndpoint("https://rss.example.com/api/greader.php", GREADER_USER, GREADER_PASS)
+pass("explicit greader.php URL used as is", direct_ok and direct_base == "https://rss.example.com/api/greader.php")
+local nowhere_ok, nowhere_err = GReaderClient.findEndpoint("https://nothing.example.com", GREADER_USER, GREADER_PASS)
+pass("no Google Reader endpoint is an http error", not nowhere_ok and nowhere_err.kind == "http")
+
+local bad_client = GReaderClient:new{ base_url = base_url, auth = "alice/wrong" }
+local bad_ok, bad_err = bad_client:checkAuth()
+pass("bad auth token rejected", not bad_ok and bad_err.kind == "auth")
+
+local greader = GReaderClient:new{ base_url = base_url, auth = auth }
+pass("auth token accepted", (greader:checkAuth()))
+greader.IDS_PAGE_SIZE = 7
+server.greader_calls = {}
+local ids_ok, gids = greader:getUnreadIds()
+local id_calls = 0
+for _, call in ipairs(server.greader_calls) do
+    if call.path == "/reader/api/0/stream/items/ids" then id_calls = id_calls + 1 end
+end
+local expected = sortedUnreadDesc()
+pass("unread IDs listed across pages without duplicates", ids_ok and #gids == #expected and gids[1] == expected[1]
+    and gids[#gids] == expected[#expected] and id_calls == math.floor(#expected / 7) + 1)
+
+local feeds_ok, gfeeds = greader:getFeeds()
+pass("feeds and labels read", feeds_ok and gfeeds.feed_titles["2"] == "Feed Two" and gfeeds.group_titles.Tech == "Tech"
+    and #gfeeds.feed_groups["2"] == 2 and gfeeds.feed_groups["3"] == nil)
+
+local items_ok, gitems = greader:getItems({ expected[1], expected[2] })
+local gfirst = gitems and gitems[1]
+pass("items converted to Fever shape", items_ok and #gitems == 2 and gfirst.id == expected[1]
+    and gfirst.feed_id == server.items[expected[1]].feed_id .. "" and gfirst.url == server.items[expected[1]].url
+    and gfirst.html == server.items[expected[1]].html and gfirst.is_read == 0
+    and gfirst.created_on_time == server.items[expected[1]].created_on_time)
+
+-- Full sync through the Google Reader client
+local gstore = FeverStore:new{ file = "greader_cache", text_dir = textDir("greader_cache") }
+local function syncGReader()
+    return FeverSync.run(greader, gstore, { max_items = 1000, html = FeverHtml })
+end
+local gsync_ok, gsummary = syncGReader()
+pass("Google Reader sync downloads every unread article", gsync_ok and gstore:itemCount() == #expected
+    and gsummary.new == #expected)
+local gnewest = gstore:getItem(expected[1])
+local gsource = server.items[expected[1]]
+pass("Google Reader article title and text stored", gnewest ~= nil
+    and gnewest.title == FeverHtml.decodeEntities(gsource.title)
+    and gstore:getText(expected[1]) == FeverHtml.toPlainText(gsource.html))
+pass("Google Reader categories stored", gstore.group_titles.Tech == "Tech" and #gstore:getCategories(false) == 3)
+for i = 1, 3 do
+    gstore:markOpened(expected[i])
+end
+server.greader_calls = {}
+gsync_ok, gsummary = syncGReader()
+local edit_calls = 0
+for _, call in ipairs(server.greader_calls) do
+    if call.path == "/reader/api/0/edit-tag" then edit_calls = edit_calls + 1 end
+end
+pass("three reads pushed in one edit-tag request", gsync_ok and gsummary.pushed == 3 and edit_calls == 1
+    and not server.unread[expected[1]] and not server.unread[expected[3]] and #gstore:getPendingReads() == 0)
+pass("read articles pruned after Google Reader sync", gstore:getItem(expected[1]) == nil and gsummary.removed == 3)
+
+gstore:markOpened(expected[4])
+greader.token = "stale"
+gsync_ok, gsummary = syncGReader()
+pass("rejected batch keeps reads queued", gsync_ok and gsummary.push_failed == 1 and #gstore:getPendingReads() == 1)
+pass("article still unread on server after rejected batch", server.unread[expected[4]] == true)
+
+-- Incomplete unread lists must fail the sync before anything is pruned
+local count_before = gstore:itemCount()
+server.greader_ids_hook = function() return 200, "{}" end
+local missing_ok, missing_err = greader:getUnreadIds()
+pass("reply without itemRefs is an error", not missing_ok and missing_err.kind == "json")
+gsync_ok = syncGReader()
+pass("sync aborts on missing itemRefs and keeps the cache", gsync_ok == false and gstore:itemCount() == count_before)
+server.greader_ids_hook = function()
+    return 200, dkjson.encode{ itemRefs = { { id = expected[5] } }, continuation = "12345" }
+end
+local loop_ok, loop_err = greader:getUnreadIds()
+pass("repeated continuation token is an error", not loop_ok and loop_err.detail == "repeated continuation")
+server.greader_ids_hook = nil
+local capped = GReaderClient:new{ base_url = base_url, auth = auth, IDS_PAGE_SIZE = 1, MAX_ID_PAGES = 2 }
+local cap_ok, cap_err = capped:getUnreadIds()
+pass("more pages than allowed is an error", not cap_ok and cap_err.detail == "too many unread pages")
+gsync_ok = syncGReader()
+pass("sync recovers once the server answers fully", gsync_ok == true)
 
 os.execute("rm -rf '" .. TMP .. "'")
 print("all tests passed")
