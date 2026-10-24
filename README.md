@@ -36,7 +36,7 @@ Opening an article queues it to be marked read on the server.
 - Articles are fetched in batches of 50, which is the FreshRSS per-request maximum.
 - A failed sync never deletes cached articles or queued reads. A failed batch is retried on the next sync.
 - Both `https://` and `http://` server URLs are accepted. If you leave out the scheme, `https://` is added. With `http://` the API key and articles are sent unencrypted, and the login check says so.
-- Changing the server URL or the API clears the local cache and any queued reads, since article IDs belong to the old account.
+- Changing the server URL, the API or the user clears the local cache and any queued reads, since article IDs belong to the old account.
 - Images are not shown. Image alt text, where present, is shown as `[Image: ...]`.
 
 ## Files

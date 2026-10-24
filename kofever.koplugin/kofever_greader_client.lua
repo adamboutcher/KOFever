@@ -223,11 +223,15 @@ function GReaderClient:getFeeds()
 end
 
 --- Fetches the IDs of every unread item, page by page.
+-- The sync treats this list as complete and prunes cached articles that are missing from it,
+-- so anything short of a complete list (a reply without `itemRefs`, a repeated continuation
+-- token, or more pages than MAX_ID_PAGES) is returned as an error rather than a partial list.
 -- @treturn bool success
 -- @treturn table array of decimal ID strings, or an error table
 function GReaderClient:getUnreadIds()
     local ids, seen = {}, {}
     local continuation
+    local used_continuations = {}
     for _ = 1, self.MAX_ID_PAGES do
         local query = {
             { "s", READING_LIST },
@@ -241,10 +245,15 @@ function GReaderClient:getUnreadIds()
         local ok, data = self:callJson("stream/items/ids", query)
         if not ok then return false, data end
         local refs = data.itemRefs
-        if refs ~= nil and type(refs) ~= "table" then
+        if refs == nil then
+            logger.warn("KOFever: unread ID response has no itemRefs")
+            return false, { kind = "json", detail = "missing itemRefs" }
+        elseif rapidjson.null ~= nil and refs == rapidjson.null then
+            refs = {} -- an explicit null is an empty list
+        elseif type(refs) ~= "table" then
             return false, { kind = "json", detail = "bad itemRefs" }
         end
-        for _, ref in ipairs(type(refs) == "table" and refs or {}) do
+        for _, ref in ipairs(refs) do
             local id = type(ref) == "table" and GReaderClient.itemIdToDecimal(ref.id)
             if id and not seen[id] then
                 seen[id] = true
@@ -252,13 +261,18 @@ function GReaderClient:getUnreadIds()
             end
         end
         local next_continuation = FeverClient.idToString(data.continuation)
-        if not next_continuation or next_continuation == "" or next_continuation == continuation then
+        if not next_continuation or next_continuation == "" then
             return true, ids
         end
+        if used_continuations[next_continuation] then
+            logger.warn("KOFever: unread ID paging repeated a continuation token")
+            return false, { kind = "json", detail = "repeated continuation" }
+        end
+        used_continuations[next_continuation] = true
         continuation = next_continuation
     end
-    logger.warn("KOFever: unread ID list truncated after", self.MAX_ID_PAGES, "pages")
-    return true, ids
+    logger.warn("KOFever: unread ID list longer than", self.MAX_ID_PAGES, "pages")
+    return false, { kind = "json", detail = "too many unread pages" }
 end
 
 -- Converts a Google Reader item into the Fever item shape the sync expects.

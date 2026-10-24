@@ -154,6 +154,9 @@ local function greaderHandler(req, path)
             { id = "feed/3", title = "Feed Three", categories = {} },
         } }
     elseif path == "/reader/api/0/stream/items/ids" then
+        if server.greader_ids_hook then
+            return server.greader_ids_hook(query)
+        end
         assert(one(query, "s") == "user/-/state/com.google/reading-list")
         assert(one(query, "xt") == "user/-/state/com.google/read")
         local n, c = tonumber(one(query, "n")), one(query, "c")
@@ -546,6 +549,25 @@ greader.token = "stale"
 gsync_ok, gsummary = syncGReader()
 pass("rejected batch keeps reads queued", gsync_ok and gsummary.push_failed == 1 and #gstore:getPendingReads() == 1)
 pass("article still unread on server after rejected batch", server.unread[expected[4]] == true)
+
+-- Incomplete unread lists must fail the sync before anything is pruned
+local count_before = gstore:itemCount()
+server.greader_ids_hook = function() return 200, "{}" end
+local missing_ok, missing_err = greader:getUnreadIds()
+pass("reply without itemRefs is an error", not missing_ok and missing_err.kind == "json")
+gsync_ok = syncGReader()
+pass("sync aborts on missing itemRefs and keeps the cache", gsync_ok == false and gstore:itemCount() == count_before)
+server.greader_ids_hook = function()
+    return 200, dkjson.encode{ itemRefs = { { id = expected[5] } }, continuation = "12345" }
+end
+local loop_ok, loop_err = greader:getUnreadIds()
+pass("repeated continuation token is an error", not loop_ok and loop_err.detail == "repeated continuation")
+server.greader_ids_hook = nil
+local capped = GReaderClient:new{ base_url = base_url, auth = auth, IDS_PAGE_SIZE = 1, MAX_ID_PAGES = 2 }
+local cap_ok, cap_err = capped:getUnreadIds()
+pass("more pages than allowed is an error", not cap_ok and cap_err.detail == "too many unread pages")
+gsync_ok = syncGReader()
+pass("sync recovers once the server answers fully", gsync_ok == true)
 
 os.execute("rm -rf '" .. TMP .. "'")
 print("all tests passed")

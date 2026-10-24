@@ -20,6 +20,7 @@ local TextViewer = require("ui/widget/textviewer")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local logger = require("logger")
+local md5 = require("ffi/sha2").md5
 local util = require("util")
 local _ = require("gettext")
 local T = require("ffi/util").template
@@ -377,19 +378,29 @@ function KOFever:checkLoginFields(server, username, api_password)
     return server, username, api_password
 end
 
---- Clears the cache when the server or the API changes: cached article IDs and queued
--- reads belong to the previous account.
-function KOFever:resetCacheIfAccountChanged(server, api_type)
+--- Identifies the account without storing the username: an MD5 hash of it, lowercased.
+local function accountId(username)
+    return md5(username:lower())
+end
+
+--- Clears the cache when the server, the API or the user changes: cached article IDs and queued
+-- reads belong to the previous account. Settings saved before the account hash existed have
+-- none, so only the server and API are compared for them.
+function KOFever:resetCacheIfAccountChanged(server, api_type, account)
     local old_server = self.settings:readSetting("server")
-    if isSet(old_server) and (old_server ~= server or self:getApiType() ~= api_type) then
+    local old_account = self.settings:readSetting("account")
+    if isSet(old_server) and (old_server ~= server or self:getApiType() ~= api_type
+            or (isSet(old_account) and old_account ~= account)) then
         getStore():clear()
-        logger.info("KOFever: server or API changed, local cache cleared")
+        logger.info("KOFever: server, API or user changed, local cache cleared")
     end
 end
 
 --- Stores a Fever login. Only the hashed API key is stored.
 function KOFever:saveFeverLogin(server, username, api_password)
-    self:resetCacheIfAccountChanged(server, API_FEVER)
+    local account = accountId(username)
+    self:resetCacheIfAccountChanged(server, API_FEVER, account)
+    self.settings:saveSetting("account", account)
     self.settings:saveSetting("api_type", API_FEVER)
     self.settings:saveSetting("server", server)
     self.settings:saveSetting("api_key", FeverClient.makeApiKey(username, api_password))
@@ -442,7 +453,9 @@ function KOFever:loginGReader(server, username, api_password)
             self:showMessage(_("Login failed:") .. "\n" .. errorMessage(check_err) .. hint)
             return
         end
-        self:resetCacheIfAccountChanged(server, API_GREADER)
+        local account = accountId(username)
+        self:resetCacheIfAccountChanged(server, API_GREADER, account)
+        self.settings:saveSetting("account", account)
         self.settings:saveSetting("api_type", API_GREADER)
         self.settings:saveSetting("server", server)
         self.settings:saveSetting("greader_url", base_url)
@@ -550,7 +563,8 @@ function KOFever:showArticleList()
     local show_read = self:showReadArticles()
     local categories_title = _("Categories")
     local menu
-    -- Key of the article list being shown ("all", "uncategorised" or a group ID), nil for the category list.
+    -- Key of the article list being shown, nil for the category list. Keys are "all", "uncategorised"
+    -- or "group:<id>"; the prefix keeps a category named "all" from colliding with the reserved keys.
     local current_key
     local views, category_table, refresh
 
@@ -621,7 +635,7 @@ function KOFever:showArticleList()
             elseif not name or name == "" then
                 name = T(_("Category %1"), category.id)
             end
-            addCategory(category.id or "uncategorised", name, category.items, category.unread)
+            addCategory(category.id and ("group:" .. category.id) or "uncategorised", name, category.items, category.unread)
         end
     end
 

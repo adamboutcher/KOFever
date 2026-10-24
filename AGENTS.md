@@ -44,7 +44,7 @@ Keep these boundaries; they are what make the sync logic testable without a devi
 
 Stored in KOReader's settings directory (`DataStorage:getSettingsDir()`):
 
-- `kofever_settings.lua`: `api_type` (`"fever"`, the default when missing, or `"greader"`), `server`, `api_key` (Fever: lowercase MD5 hex of `username:apipassword`), `greader_url` and `greader_auth` (Google Reader: the endpoint that answered and the token from `ClientLogin`), `cache_size`, `show_read_articles`. The plain API password and the username are never stored. Saving a login for one API deletes the other API's credentials.
+- `kofever_settings.lua`: `api_type` (`"fever"`, the default when missing, or `"greader"`), `server`, `api_key` (Fever: lowercase MD5 hex of `username:apipassword`), `greader_url` and `greader_auth` (Google Reader: the endpoint that answered and the token from `ClientLogin`), `account` (MD5 of the lowercased username, only used to notice a change of user), `cache_size`, `show_read_articles`. The plain API password and the username itself are never stored. Saving a login for one API deletes the other API's credentials.
 - `kofever_cache.lua` (the index): `items` (by article ID string: `id, title, url, feed_id, created, read`), `feed_titles`, `group_titles`, `feed_groups` (feed ID to an array of group IDs), `pending_reads` (array of article IDs).
 - `kofever_articles/<id>.txt`: the plain-text body of each article. Text is kept out of the index on purpose: the index is rewritten on every article open and every sync batch, and with up to 3000 articles it must stay small. `Store:putItem` writes the text file and strips `text` from the record.
 
@@ -55,13 +55,13 @@ Invariants that changes must keep:
 3. Nothing is marked read on the server except through the client's `markRead` / `markReadMany` for IDs in `pending_reads`.
 4. The cache limit drops read articles before unread ones, oldest first within each group, and only downloads the newest unread articles that fit.
 5. The index and the text files stay in step: removing an item removes its file, `Store:load` deletes text files the index does not reference, and a missing text file causes the entry to be dropped when opened.
-6. Changing the server URL or the API type clears the cache, because article IDs belong to the old account.
+6. Changing the server URL, the API type or the user clears the cache, because article IDs and queued reads belong to the old account. Settings saved before `account` existed have none, so for them only the server and API are compared.
 
 ## Sync order (`kofever_sync.lua`)
 
 1. Push `pending_reads`, in batches of `MAX_IDS_PER_REQUEST` when the client has `markReadMany`, otherwise one at a time (stop early on a network or auth error; keep failures queued).
 2. Fetch feeds and categories in one request (`?api&groups&feeds`). Keep the old data on failure.
-3. Fetch `unread_item_ids`. Abort here on failure; nothing has been removed yet.
+3. Fetch the unread IDs. Abort here on failure; nothing has been removed yet. Clients must return an error rather than a partial list, because the next step treats the list as complete (the Google Reader client fails on a missing `itemRefs`, a repeated continuation token or too many pages).
 4. Prune articles no longer unread on the server (or flag them read when `keep_read` is set). If the server lists a locally read, already-pushed article as unread again, the server wins.
 5. Download missing articles, newest first by ID, in batches of 50, capped at the cache size.
 6. Apply the cache limit, then save.
