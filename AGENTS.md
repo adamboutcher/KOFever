@@ -78,7 +78,7 @@ Check anything not listed here against the KOReader source (`koreader/koreader`,
 - `MultiInputDialog` fields accept `text_type = "password"`; call `dialog:onShowKeyboard()` after showing it.
 - `Menu` rows support `text`, `mandatory` (right-hand text), `bold` and `dim`, but not italic. The right-hand text is never truncated; the title gets whatever width is left.
 - `Menu` only shows its back arrow when `onReturn` is set, and enables it when `menu.paths` is non-empty. The category browser manages `paths` itself (the same pattern as the Calibre plugin's search) and overrides `onClose` so the close button and Back key go up a level first.
-- `TextViewer` accepts `close_callback`, and every way of closing it goes through `onClose`. The article list stays open under the viewer and is rebuilt in that callback.
+- `TextViewer` accepts `close_callback`, and every way of closing it goes through `onClose`. The article list stays open under the viewer and is rebuilt in that callback. Extra buttons go in `buttons_table`; set `add_default_buttons = true` to keep its own Find/top/bottom/Close row. The Previous/Next buttons close the viewer with `UIManager:close` (skipping `onClose`) and open the next article, so the list is rebuilt only once reading stops, positioned on the last article viewed.
 - The sync blocks the UI loop, so progress messages are shown with `UIManager:show` followed by `UIManager:forceRePaint()`.
 
 ## FreshRSS Fever specifics

@@ -437,15 +437,15 @@ function KOFever:showArticleList()
     local function articleTable(items)
         local item_table = {}
         for index, item in ipairs(items) do
-            local article_id = item.id
             table.insert(item_table, {
                 text = displayTitle(item.title),
                 -- With read articles shown, unread titles are bold and read titles normal weight.
                 bold = show_read and not item.read,
                 mandatory = displayTitle(store:getFeedTitle(item.feed_id)),
                 callback = function()
-                    self:openArticle(article_id, function()
-                        refresh(index)
+                    -- Previous and Next in the viewer step through this list as it is now.
+                    self:openArticle(items, index, function(last_index)
+                        refresh(items, last_index)
                     end)
                 end,
             })
@@ -495,8 +495,9 @@ function KOFever:showArticleList()
     -- With one category or none (e.g. before the first sync that fetched categories), skip the category list.
     local use_categories = #category_table > 2
 
-    --- Rebuilds the current article list after an article was opened, staying near `position`.
-    refresh = function(position)
+    --- Rebuilds the current article list after reading. `snapshot` is the list the article was opened
+    -- from and `last_index` the position in it of the last article viewed.
+    refresh = function(snapshot, last_index)
         build()
         local view
         if use_categories then
@@ -506,6 +507,21 @@ function KOFever:showArticleList()
         else
             view = views.all
             view.name = show_read and _("Articles") or _("Unread articles")
+        end
+        -- Stay on the last article viewed, or on the next one still listed if it is now hidden.
+        local positions = {}
+        for i, item in ipairs(view.items) do
+            positions[item.id] = i
+        end
+        local position
+        for k = last_index, #snapshot do
+            position = positions[snapshot[k].id]
+            if position then
+                break
+            end
+        end
+        if not position and #view.items > 0 then
+            position = #view.items
         end
         menu:switchItemTable(articlesTitle(view.name, view.unread), articleTable(view.items), position)
     end
@@ -548,14 +564,19 @@ function KOFever:showArticleList()
     UIManager:show(menu)
 end
 
---- Opens an article in a TextViewer.
--- @func[opt] close_callback called when the viewer is closed (or the article could not be opened)
-function KOFever:openArticle(id, close_callback)
+--- Opens `items[index]` in a TextViewer, with Previous and Next buttons that step through `items`.
+-- @func[opt] close_callback called with the index of the last article viewed when reading stops
+-- (the viewer is closed, or an article could not be opened)
+function KOFever:openArticle(items, index, close_callback)
     local store = getStore()
+    local id = items[index].id
+    local function done()
+        if close_callback then close_callback(index) end
+    end
     local item = store:getItem(id)
     if not item then
         self:showMessage(_("This article is no longer in the cache. Run Sync now."))
-        if close_callback then close_callback() end
+        done()
         return
     end
     local text = store:getText(id)
@@ -565,7 +586,7 @@ function KOFever:openArticle(id, close_callback)
         store:removeItem(id)
         store:save()
         self:showMessage(_("This article's text is missing from the cache. Run Sync now to download it again."))
-        if close_callback then close_callback() end
+        done()
         return
     end
     store:markOpened(id)
@@ -577,13 +598,44 @@ function KOFever:openArticle(id, close_callback)
     end
     table.insert(parts, text ~= "" and text or _("(This article has no text.)"))
 
-    UIManager:show(TextViewer:new{
+    local viewer
+    local function step(offset)
+        -- Close directly rather than through onClose, so the list is only rebuilt when reading stops.
+        UIManager:close(viewer)
+        self:openArticle(items, index + offset, close_callback)
+    end
+    viewer = TextViewer:new{
         title = displayTitle(item.title),
         title_multilines = true,
         text = table.concat(parts, "\n"),
         text_type = "general",
-        close_callback = close_callback,
-    })
+        buttons_table = {
+            {
+                {
+                    text = "◁ " .. _("Previous"),
+                    enabled = index > 1,
+                    callback = function()
+                        step(-1)
+                    end,
+                },
+                {
+                    text = T(_("%1 of %2"), index, #items),
+                    enabled = false,
+                },
+                {
+                    text = _("Next") .. " ▷",
+                    enabled = index < #items,
+                    callback = function()
+                        step(1)
+                    end,
+                },
+            },
+        },
+        -- Keep TextViewer's own Find, top, bottom and Close buttons below ours.
+        add_default_buttons = true,
+        close_callback = done,
+    }
+    UIManager:show(viewer)
 end
 
 return KOFever
