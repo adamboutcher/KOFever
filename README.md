@@ -50,6 +50,7 @@ Opening an article queues it to be marked read on the server.
 | `tests/run_tests.lua` | Offline test harness with a simulated FreshRSS server |
 | `AGENTS.md` | Notes for contributors and AI coding agents: architecture, invariants, KOReader and FreshRSS quirks |
 | `LICENSE` | GNU Affero General Public License v3.0 |
+| `plan.md` | Researched ideas for future features, not yet built |
 
 Settings and the cache index are stored in KOReader's settings directory as `kofever_settings.lua` and `kofever_cache.lua`. Article text is stored separately, one file per article, in the `kofever_articles` folder next to them, so the index stays small even with a large cache. Caches from earlier versions, which kept the text in the index, are converted automatically. Errors are written to KOReader's log (`crash.log`) with a `KOFever:` prefix.
 
