@@ -1,10 +1,10 @@
 # KOFever
 
-A KOReader plugin that syncs unread articles from a FreshRSS server using the Fever API, so they can be read offline on a Kindle (or any KOReader device). Articles opened offline are marked read on the server at the next sync.
+A KOReader plugin that syncs unread articles from a FreshRSS server using the Fever or Google Reader API, so they can be read offline on a Kindle (or any KOReader device). Articles opened offline are marked read on the server at the next sync.
 
 ## Installation
 
-1. Enable the Fever API in FreshRSS and set an API password (FreshRSS: Settings > Profile > API management). This is separate from your normal login password.
+1. Enable API access in FreshRSS and set an API password (FreshRSS: Settings > Profile > API management). This is separate from your normal login password. The same API password works for both the Fever and the Google Reader API.
 2. Download `KOFever-<version>.zip` from the latest [release](https://github.com/adamboutcher/KOFever/releases) and extract it. It contains the `kofever.koplugin` folder.
 3. Connect the Kindle by USB.
 4. Copy the `kofever.koplugin` folder into `koreader/plugins/` on the device (usually `/mnt/us/koreader/plugins/`). When updating, replace the old folder; your settings and cached articles are kept, since they live in KOReader's settings directory.
@@ -16,7 +16,9 @@ The installed version is shown in the plugin's description under Tools > More to
 
 The plugin adds a **KOFever** entry to the Tools menu with these items:
 
-- **Server login**: enter the server URL (for example `https://rss.example.com`), your FreshRSS username and the API password. Only the Fever API key (MD5 of `username:apipassword`) is stored; the password itself is never saved. If the device is online, the login is checked straight away.
+- **Server login**: first choose the API your server uses, **Fever** or **Google Reader** (FreshRSS supports both), then enter the server URL (for example `https://rss.example.com`), your username and the API password. The password itself is never saved.
+  - **Fever**: only the Fever API key (MD5 of `username:apipassword`) is stored. The login works offline and is checked straight away if the device is online.
+  - **Google Reader**: the password is sent once to log in and the server's auth token is stored instead, so the device must be online when you save. The plugin tries `<server>/api/greader.php` (FreshRSS) and then `<server>` itself (servers that answer at their root URL). Reads are sent to the server in batches of 50 instead of one request per article.
 - **Sync now**: turns Wi-Fi on if needed, sends any reads queued offline, then downloads unread articles.
 - **Browse unread articles** (or **Browse articles** when read articles are shown): shows your FreshRSS categories with the number of unread articles in each, plus an **All articles** entry at the top. Tap a category to list its articles, newest first, with the feed name on the right; tap an article to read it as plain text. The **Previous** and **Next** buttons under the article move through the list it was opened from (the middle button shows the position, such as "3 of 20"); each article you move to is marked read as it opens. Closing the article returns to the list on the same page, with the article you just read hidden (or shown as read). The back arrow, the close button or the Back key returns to the category list. Articles from feeds without a category are under **Uncategorised**. If all cached articles are in one category, the category list is skipped.
 - **Show read articles**: a checkbox, off by default. See below.
@@ -34,7 +36,7 @@ Opening an article queues it to be marked read on the server.
 - Articles are fetched in batches of 50, which is the FreshRSS per-request maximum.
 - A failed sync never deletes cached articles or queued reads. A failed batch is retried on the next sync.
 - Both `https://` and `http://` server URLs are accepted. If you leave out the scheme, `https://` is added. With `http://` the API key and articles are sent unencrypted, and the login check says so.
-- Changing the server URL clears the local cache and any queued reads, since article IDs belong to the old server.
+- Changing the server URL or the API clears the local cache and any queued reads, since article IDs belong to the old account.
 - Images are not shown. Image alt text, where present, is shown as `[Image: ...]`.
 
 ## Files
@@ -44,6 +46,8 @@ Opening an article queues it to be marked read on the server.
 | `kofever.koplugin/_meta.lua` | Plugin name and description shown by KOReader |
 | `kofever.koplugin/main.lua` | Menu entries, login dialog, article list and viewer |
 | `kofever.koplugin/kofever_client.lua` | Fever API client (no UI code) |
+| `kofever.koplugin/kofever_greader_client.lua` | Google Reader API client, same interface as the Fever client (no UI code) |
+| `kofever.koplugin/kofever_http.lua` | HTTP helper shared by both clients |
 | `kofever.koplugin/kofever_sync.lua` | Sync algorithm (no UI or HTTP code) |
 | `kofever.koplugin/kofever_store.lua` | Local cache stored with `LuaSettings` |
 | `kofever.koplugin/kofever_html.lua` | HTML to plain text conversion |
@@ -56,13 +60,13 @@ Settings and the cache index are stored in KOReader's settings directory as `kof
 
 ## Running the tests
 
-The tests stub the KOReader modules and simulate the FreshRSS Fever endpoint, so they run on a desktop without KOReader. They need LuaJIT, `dkjson` (the `lua-dkjson` package on Debian/Ubuntu) and a checkout of [koreader-base](https://github.com/koreader/koreader-base) for `ffi/sha2.lua`.
+The tests stub the KOReader modules and simulate FreshRSS's Fever and Google Reader endpoints, so they run on a desktop without KOReader. They need LuaJIT, `dkjson` (the `lua-dkjson` package on Debian/Ubuntu) and a checkout of [koreader-base](https://github.com/koreader/koreader-base) for `ffi/sha2.lua`.
 
 ```sh
 KOREADER_BASE=/path/to/koreader-base luajit tests/run_tests.lua
 ```
 
-The tests cover the sync algorithm, cache limit, offline read queue and HTML conversion. They do not exercise the KOReader UI or real network code, so the device testing steps in the plan still apply.
+The tests cover both API clients, the sync algorithm, cache limit, offline read queue and HTML conversion. They do not exercise the KOReader UI or real network code, so the device testing steps in the plan still apply.
 
 ## Releases
 

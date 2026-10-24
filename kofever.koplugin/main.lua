@@ -1,5 +1,5 @@
 --[[--
-KOFever: read FreshRSS articles offline through the Fever API.
+KOFever: read FreshRSS articles offline through the Fever or Google Reader API.
 
 Syncs unread articles to a local cache, shows them as plain text, and queues reads
 made offline so they are marked read on the server at the next sync.
@@ -7,6 +7,7 @@ made offline so they are marked read on the server at the next sync.
 @module koplugin.kofever
 --]]
 
+local ButtonDialog = require("ui/widget/buttondialog")
 local ConfirmBox = require("ui/widget/confirmbox")
 local DataStorage = require("datastorage")
 local InfoMessage = require("ui/widget/infomessage")
@@ -26,6 +27,7 @@ local T = require("ffi/util").template
 -- The plugin directory is only on package.path while main.lua is loading,
 -- so the plugin's own modules must be required here at the top.
 local FeverClient = require("kofever_client")
+local GReaderClient = require("kofever_greader_client")
 local FeverHtml = require("kofever_html")
 local FeverStore = require("kofever_store")
 local FeverSync = require("kofever_sync")
@@ -68,6 +70,11 @@ local function displayTitle(text)
     return (text:gsub("\239\188[\134\156\158]", FULLWIDTH_TO_ASCII))
 end
 
+-- Supported server APIs. The names are product names, so they are not translated.
+local API_FEVER = "fever"
+local API_GREADER = "greader"
+local API_NAMES = { [API_FEVER] = "Fever", [API_GREADER] = "Google Reader" }
+
 local function errorMessage(err)
     local kind = err and err.kind
     if kind == "auth" then
@@ -75,7 +82,7 @@ local function errorMessage(err)
     elseif kind == "http" then
         return T(_("The server returned an error (%1). Check the server URL."), err.detail)
     elseif kind == "json" then
-        return _("The server sent an unexpected response. Check the server URL and that the Fever API is enabled in FreshRSS.")
+        return _("The server sent an unexpected response. Check the server URL, the API type and that API access is enabled in FreshRSS.")
     end
     return _("Could not reach the server. Check the Wi-Fi connection and the server URL.")
 end
@@ -144,17 +151,29 @@ When off, articles disappear from the list once opened and are removed from the 
                 text = _("Server login"),
                 keep_menu_open = true,
                 callback = function()
-                    self:showLoginDialog()
+                    self:showApiChoice()
                 end,
             },
         },
     }
 end
 
+function KOFever:getApiType()
+    return self.settings:readSetting("api_type") or API_FEVER
+end
+
+local function isSet(value)
+    return value ~= nil and value ~= ""
+end
+
 function KOFever:isConfigured()
-    local server = self.settings:readSetting("server")
-    local api_key = self.settings:readSetting("api_key")
-    return server and server ~= "" and api_key and api_key ~= ""
+    if not isSet(self.settings:readSetting("server")) then
+        return false
+    end
+    if self:getApiType() == API_GREADER then
+        return isSet(self.settings:readSetting("greader_url")) and isSet(self.settings:readSetting("greader_auth"))
+    end
+    return isSet(self.settings:readSetting("api_key"))
 end
 
 function KOFever:getCacheSize()
@@ -209,6 +228,12 @@ function KOFever:showReadArticles()
 end
 
 function KOFever:getClient()
+    if self:getApiType() == API_GREADER then
+        return GReaderClient:new{
+            base_url = self.settings:readSetting("greader_url"),
+            auth = self.settings:readSetting("greader_auth"),
+        }
+    end
     return FeverClient:new{
         server = self.settings:readSetting("server"),
         api_key = self.settings:readSetting("api_key"),
@@ -237,10 +262,47 @@ end
 
 -- Login ----------------------------------------------------------------------
 
-function KOFever:showLoginDialog()
+--- Asks which API the server uses, then shows the login dialog for it.
+function KOFever:showApiChoice()
+    local current = self.settings:readSetting("server") and self:getApiType()
+    local dialog
+    local function choice(api_type)
+        local label = T(_("%1 API"), API_NAMES[api_type])
+        if api_type == current then
+            label = T(_("%1 (current)"), label)
+        end
+        return {
+            {
+                text = label,
+                callback = function()
+                    UIManager:close(dialog)
+                    self:showLoginDialog(api_type)
+                end,
+            },
+        }
+    end
+    dialog = ButtonDialog:new{
+        title = _("Which API does your server use?\n\nFreshRSS supports both. Google Reader sends read articles in batches; Fever works with more older servers."),
+        buttons = {
+            choice(API_FEVER),
+            choice(API_GREADER),
+            {
+                {
+                    text = _("Cancel"),
+                    callback = function()
+                        UIManager:close(dialog)
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(dialog)
+end
+
+function KOFever:showLoginDialog(api_type)
     local dialog
     dialog = MultiInputDialog:new{
-        title = _("KOFever server login"),
+        title = T(_("Server login (%1 API)"), API_NAMES[api_type]),
         fields = {
             {
                 text = self.settings:readSetting("server") or "",
@@ -270,8 +332,15 @@ function KOFever:showLoginDialog()
                     is_enter_default = true,
                     callback = function()
                         local fields = dialog:getFields()
-                        if self:saveLogin(fields[1], fields[2], fields[3]) then
-                            UIManager:close(dialog)
+                        local server, username, api_password = self:checkLoginFields(fields[1], fields[2], fields[3])
+                        if not server then
+                            return
+                        end
+                        UIManager:close(dialog)
+                        if api_type == API_GREADER then
+                            self:loginGReader(server, username, api_password)
+                        else
+                            self:saveFeverLogin(server, username, api_password)
                             self:verifyLogin()
                         end
                     end,
@@ -283,45 +352,110 @@ function KOFever:showLoginDialog()
     dialog:onShowKeyboard()
 end
 
---- Validates and stores the login. Only the hashed API key is stored.
--- @treturn bool true if the login was saved
-function KOFever:saveLogin(server, username, api_password)
+--- Validates the login fields and normalises the server URL.
+-- @treturn string|nil server URL, or nil after showing a message
+-- @treturn string username
+-- @treturn string API password
+function KOFever:checkLoginFields(server, username, api_password)
     server = util.trim(server or "")
     username = util.trim(username or "")
     api_password = api_password or ""
     if server == "" or username == "" or api_password == "" then
         self:showMessage(_("Please fill in the server URL, username and API password."))
-        return false
+        return nil
     end
 
     -- Accept a pasted endpoint URL, and default to HTTPS when no scheme is given.
-    server = server:gsub("/+$", ""):gsub("/api/fever%.php.*$", ""):gsub("/+$", "")
+    server = server:gsub("/+$", ""):gsub("/api/fever%.php.*$", ""):gsub("/api/greader%.php.*$", ""):gsub("/+$", "")
     if not server:match("^%a[%w+.-]*://") then
         server = "https://" .. server
     end
     if not server:match("^https?://[^/]") then
         self:showMessage(_("The server URL must start with https:// or http://"))
-        return false
+        return nil
     end
+    return server, username, api_password
+end
 
-    -- Cached articles and queued reads belong to the previous server, so drop them.
+--- Clears the cache when the server or the API changes: cached article IDs and queued
+-- reads belong to the previous account.
+function KOFever:resetCacheIfAccountChanged(server, api_type)
     local old_server = self.settings:readSetting("server")
-    if old_server and old_server ~= "" and old_server ~= server then
+    if isSet(old_server) and (old_server ~= server or self:getApiType() ~= api_type) then
         getStore():clear()
-        logger.info("KOFever: server changed, local cache cleared")
+        logger.info("KOFever: server or API changed, local cache cleared")
     end
+end
 
+--- Stores a Fever login. Only the hashed API key is stored.
+function KOFever:saveFeverLogin(server, username, api_password)
+    self:resetCacheIfAccountChanged(server, API_FEVER)
+    self.settings:saveSetting("api_type", API_FEVER)
     self.settings:saveSetting("server", server)
     self.settings:saveSetting("api_key", FeverClient.makeApiKey(username, api_password))
+    self.settings:delSetting("greader_url")
+    self.settings:delSetting("greader_auth")
     self.settings:flush()
-    return true
+end
+
+local function plainHttpNote(server)
+    if server:match("^http://") then
+        return "\n\n" .. _("Note: this server uses plain http, so the login and articles are sent unencrypted.")
+    end
+    return ""
+end
+
+--- Logs in with the Google Reader API and stores the returned auth token.
+-- The password is only used for this request and is never stored, so this needs a connection.
+function KOFever:loginGReader(server, username, api_password)
+    NetworkMgr:runWhenOnline(function()
+        self:showProgress(_("Logging in…"))
+        local call_ok, ok, base_url, auth = pcall(GReaderClient.findEndpoint, server, username, api_password)
+        -- Logging in does not use the Authorization header, but every later call does, and some web
+        -- servers (Apache without extra configuration) drop it. Make one authorised call to be sure.
+        local check_ok, check_err = true, nil
+        if call_ok and ok then
+            local pcall_ok, result, err = pcall(function()
+                return GReaderClient:new{ base_url = base_url, auth = auth }:checkAuth()
+            end)
+            if pcall_ok then
+                check_ok, check_err = result, err
+            else
+                call_ok, ok = false, result
+            end
+        end
+        self:closeProgress()
+        if not call_ok then
+            logger.err("KOFever: Google Reader login failed:", ok)
+            self:showMessage(_("Login failed unexpectedly. See the log for details."))
+            return
+        end
+        if not ok then
+            self:showMessage(_("Login failed:") .. "\n" .. errorMessage(base_url))
+            return
+        end
+        if not check_ok then
+            local hint = ""
+            if check_err and check_err.kind == "auth" then
+                hint = "\n\n" .. _("The password was accepted, but later requests were refused. The web server may be dropping the Authorization header; see the FreshRSS documentation on API access.")
+            end
+            self:showMessage(_("Login failed:") .. "\n" .. errorMessage(check_err) .. hint)
+            return
+        end
+        self:resetCacheIfAccountChanged(server, API_GREADER)
+        self.settings:saveSetting("api_type", API_GREADER)
+        self.settings:saveSetting("server", server)
+        self.settings:saveSetting("greader_url", base_url)
+        self.settings:saveSetting("greader_auth", auth)
+        self.settings:delSetting("api_key")
+        self.settings:flush()
+        local note = plainHttpNote(server)
+        self:showMessage(_("Logged in with the Google Reader API.") .. note, note == "" and 3 or nil)
+    end)
 end
 
 function KOFever:verifyLogin()
-    local note = ""
-    if self.settings:readSetting("server"):match("^http://") then
-        note = "\n\n" .. _("Note: this server uses plain http, so the API key and articles are sent unencrypted.")
-    end
+    local note = plainHttpNote(self.settings:readSetting("server"))
     if not NetworkMgr:isOnline() then
         self:showMessage(_("Login saved. It will be checked at the next sync.") .. note)
         return

@@ -59,23 +59,34 @@ function Sync.run(client, store, opts)
     }
 
     -- 1. Push reads made since the last sync. Failed IDs stay queued.
+    -- Clients with `markReadMany` take a batch per request; others one ID per request.
     local pending = store:getPendingReads()
     local remaining = {}
     local stop_pushing = false
-    for i, id in ipairs(pending) do
-        if stop_pushing then
-            table.insert(remaining, id)
-        else
-            progress("push", i, #pending)
-            local ok, err = client:markRead(id)
-            if ok then
-                summary.pushed = summary.pushed + 1
+    local push_batch_size = client.markReadMany and client.MAX_IDS_PER_REQUEST or 1
+    for first = 1, #pending, push_batch_size do
+        local batch = {}
+        for i = first, math.min(first + push_batch_size - 1, #pending) do
+            table.insert(batch, pending[i])
+        end
+        local ok, err
+        if not stop_pushing then
+            progress("push", first + #batch - 1, #pending)
+            if client.markReadMany then
+                ok, err = client:markReadMany(batch)
             else
+                ok, err = client:markRead(batch[1])
+            end
+        end
+        if ok then
+            summary.pushed = summary.pushed + #batch
+        else
+            for _, id in ipairs(batch) do
                 table.insert(remaining, id)
-                -- No point waiting on a timeout for every remaining ID.
-                if err and (err.kind == "network" or err.kind == "auth") then
-                    stop_pushing = true
-                end
+            end
+            -- No point waiting on a timeout for every remaining ID.
+            if err and (err.kind == "network" or err.kind == "auth") then
+                stop_pushing = true
             end
         end
     end

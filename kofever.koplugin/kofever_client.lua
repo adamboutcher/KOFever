@@ -8,12 +8,10 @@ where `err` is a table `{ kind = "network"|"http"|"json"|"auth", detail = string
 @module koplugin.kofever.client
 --]]
 
-local http = require("socket.http")
+local Http = require("kofever_http")
 local logger = require("logger")
-local ltn12 = require("ltn12")
 local md5 = require("ffi/sha2").md5
 local rapidjson = require("rapidjson")
-local socket = require("socket")
 local socketutil = require("socketutil")
 
 local FeverClient = {
@@ -57,51 +55,22 @@ function FeverClient:request(flags, fields, timeouts)
         url = url .. "&" .. flags
     end
 
-    local body_parts = { "api_key=" .. self.api_key }
+    local body_fields = { { "api_key", self.api_key } }
     for key, value in pairs(fields or {}) do
-        -- Only digits and plain words are ever sent, so no form encoding is needed.
-        table.insert(body_parts, key .. "=" .. tostring(value))
+        table.insert(body_fields, { key, value })
     end
-    local body = table.concat(body_parts, "&")
 
-    local block_timeout, total_timeout = socketutil:set_timeout(
-        timeouts and timeouts[1] or socketutil.LARGE_BLOCK_TIMEOUT,
-        timeouts and timeouts[2] or socketutil.LARGE_TOTAL_TIMEOUT)
-    local sink = {}
-    local request = {
+    local ok, content = Http.request{
         url = url,
         method = "POST",
-        headers = {
-            ["Content-Type"] = "application/x-www-form-urlencoded",
-            ["Content-Length"] = tostring(#body),
-            ["Accept"] = "application/json",
-        },
-        source = ltn12.source.string(body),
-        sink = socketutil.table_sink(sink),
+        headers = { ["Accept"] = "application/json" },
+        body = Http.formEncode(body_fields),
+        timeouts = timeouts,
     }
-
-    -- Never log the request body: it holds the API key.
-    logger.dbg("KOFever: POST", url)
-    local ok, code, headers, status = pcall(function()
-        return socket.skip(1, http.request(request))
-    end)
-    socketutil:reset_timeout()
-
     if not ok then
-        logger.warn("KOFever: request raised an error:", code)
-        return false, { kind = "network", detail = tostring(code) }
-    end
-    if headers == nil then
-        local detail = socketutil.describe_error(code, block_timeout, total_timeout) or tostring(status or code)
-        logger.warn("KOFever: network error:", detail)
-        return false, { kind = "network", detail = detail }
-    end
-    if code ~= 200 then
-        logger.warn("KOFever: HTTP error:", code, status)
-        return false, { kind = "http", detail = tostring(status or code) }
+        return false, content
     end
 
-    local content = table.concat(sink)
     local decoded_ok, data = pcall(rapidjson.decode, content)
     if not decoded_ok or type(data) ~= "table" then
         logger.warn("KOFever: response is not valid JSON:", content:sub(1, 200))
