@@ -23,7 +23,7 @@ There is no build step. The `kofever.koplugin` folder is copied as-is into `kore
 | `kofever.koplugin/kofever_store.lua` | Local cache: a `LuaSettings` index plus one text file per article. |
 | `kofever.koplugin/kofever_html.lua` | HTML to plain text. No KOReader dependencies. |
 | `tests/run_tests.lua` | Offline test harness: stubs KOReader modules and simulates a FreshRSS server. |
-| `.github/workflows/ci.yml` | Lint, version placeholder check and tests on every PR and push to `main`. |
+| `.github/workflows/ci.yml` | Lint, version placeholder check and tests on every PR and push to `main`. On PRs, a `package` job then builds a test package (version `pr<number>-<commit>`), uploads it as an artifact and links it from a PR comment it keeps updated. |
 | `.github/workflows/release.yml` | On a published release: stamps the tag into `_meta.lua`, zips the plugin folder and attaches it. |
 | `.luacheckrc` | Lint settings, based on KOReader's own. |
 | `LICENSE` | AGPL-3.0, matching KOReader. Copied into the plugin folder in release zips. |
