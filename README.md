@@ -79,3 +79,7 @@ KOFever is licensed under the [GNU Affero General Public License v3.0](LICENSE),
 ## Continuous integration
 
 Lint and the tests run on GitHub Actions for every pull request and every push to `main` (`.github/workflows/ci.yml`). To lint locally, run `luacheck kofever.koplugin tests` from the repository root.
+
+### Test packages for pull requests
+
+When the tests pass on a pull request, CI also builds an installable test package of the proposed changes (the pull request merged into its base branch). A comment on the pull request links to it and is updated on every push. Download it (you need to be signed in to GitHub), extract it, and copy the `kofever.koplugin` folder into `koreader/plugins/` on the device, replacing the old one. The plugin's description in Plugin management shows a version such as `pr14-1a2b3c4` (pull request number and commit), so you can tell which build is installed. Packages are kept for 14 days. Pull requests from forks get the package on the workflow run's page but no comment, because their token cannot write to the pull request.
