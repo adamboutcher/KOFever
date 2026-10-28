@@ -79,3 +79,67 @@ Keep the boundaries from `AGENTS.md`:
 3. Failures leave the summary in place and show a short message; KOReader never crashes or shows a raw Lua error.
 4. Invariants 1 to 6 in `AGENTS.md` still hold, and the new code paths have tests.
 5. README documents the button and the FreshRSS per-feed alternative.
+
+---
+
+## 2. Star articles
+
+Status: not started.
+
+### 2.1 Idea
+
+A **Star** button in the article viewer. Tapping it keeps the article on the device and stars it on FreshRSS, the same way reads are queued offline and sent at the next sync. A starred article stays cached after it is read, and is shown in a **Starred** entry in the category list.
+
+### 2.2 What the servers offer
+
+- **Fever**: [Verified: FreshRSS `p/api/fever.php`]
+  - `mark=item&as=saved&id=<id>` stars an item and `as=unsaved` removes the star. FreshRSS also accepts `with_ids=<comma separated ids>` instead of `id` to do several at once. [Verified, but this is not in the Fever spec, so other servers may not support it.]
+  - `?api&saved_item_ids` returns the IDs of all starred items.
+  - Each item from `items` already carries `is_saved` (0 or 1). KOFever currently ignores it.
+- **Google Reader**: [Verified: FreshRSS `p/api/greader.php`]
+  - `POST edit-tag` with `T`, `a=user/-/state/com.google/starred` (or `r=` to remove) and repeated `i` fields. This is the call `markReadMany` already uses, with a different tag, and it handles many items in one request.
+  - `stream/items/ids?s=user/-/state/com.google/starred` lists starred item IDs, paged with the continuation token like the unread list.
+  - Items from `stream/items/contents` list `user/-/state/com.google/starred` in `categories` when starred (`app/Models/Entry.php`, `toGReader`). [Verified]
+- Other Google Reader servers (Miniflux, The Old Reader and others) probably behave the same way. [Guess]
+
+### 2.3 Proposed behaviour
+
+1. **Star button** in the viewer's `buttons_table`, showing **Star** or **Unstar** depending on the current state. The change is applied locally straight away and queued for the server.
+2. **Offline queue**: a new `pending_stars` table in the cache index, mapping article ID to the wanted state (`true` or `false`). A later toggle of the same article replaces the earlier one, so only the final state is sent.
+3. **Sync**: push `pending_stars` right after `pending_reads`. The clients get `markStarred(id, starred)` and an optional `markStarredMany(ids, starred)`, following the existing `markRead` and `markReadMany` pattern. Entries stay queued on failure.
+4. **Pull stars from the server**: fetch the starred IDs at sync, download any starred article not yet cached, and update the `starred` flag on cached articles, so stars set in the FreshRSS web interface appear on the device. A local change still waiting in `pending_stars` wins over the server until it has been sent.
+5. **Starred view**: a **Starred** entry in the category list, shown only when at least one article is starred, listing starred articles newest first. The usual viewer, Previous and Next buttons work from it.
+6. **Cache rules**: starred articles are not removed by the cache limit or by pruning, even when read, and do not count toward the cache size. Unstarring makes the article ordinary again, so it is pruned at the next sync if it is read. Clear cache removes starred articles and pending stars too, with the confirmation text updated to say so.
+
+### 2.4 Design
+
+- Keep the client interface additive: `getStarredIds` (decimal ID strings), `markStarred`, optional `markStarredMany`. Update the interface list in `AGENTS.md`.
+- Both clients must return an error rather than a partial starred list, as they must for unread IDs. Pruning of the starred flag depends on the list being complete.
+- Store: an item field `starred`, `Store:setStarred(id, bool)`, and the `pending_stars` table. `Store:applyLimit` and the sync pruning step skip starred items. Add a new invariant to `AGENTS.md`: a star queued in `pending_stars` is never dropped until the server accepts it.
+- Review invariant 4 in `AGENTS.md` (the cache limit drops read articles first): starred articles are now exempt.
+- Fever `getItems` and the Google Reader item conversion fill in `is_starred` (Fever shape gains one field alongside `is_read`).
+- No change to the rule that nothing is marked on the server except through the client for IDs in the pending tables.
+
+### 2.5 Tests
+
+- Fake Fever and Google Reader servers gain starred state, `saved_item_ids`, the starred stream and `edit-tag` with the starred tag.
+- Star while offline, then sync: the server shows the star and the queue is empty.
+- Star on the server, then sync: the article is downloaded and shown as starred.
+- Failed push keeps the queue; a toggle replaces an earlier queued state.
+- A starred article survives the cache limit and pruning; unstarring a read article lets the next sync prune it.
+- Clear cache empties stars and the queue.
+
+### 2.6 Open questions
+
+- Should starred articles count toward the cache size? The plan says no, so a user who stars many articles can use more storage than the setting suggests. Reconsider if the starred set grows large. [Guess]
+- Should stars fetched from the server be capped on the first sync? A large starred history would otherwise be downloaded in full. A separate cap, for example the newest 200 starred articles, is one option. [Guess]
+- Fever servers other than FreshRSS may not accept `with_ids` for marking, so the Fever client should fall back to one request per item when the batched call fails. [Verify]
+
+### 2.7 Acceptance criteria
+
+1. Starring an article offline shows it as starred on the device and on FreshRSS after the next sync.
+2. A star added or removed in the FreshRSS web interface appears on the device after the next sync.
+3. Starred articles survive reading, the cache limit and pruning until they are unstarred.
+4. A failed or interrupted sync never loses a queued star.
+5. Invariants 1 to 6 in `AGENTS.md` still hold, with the new star invariant added, and the new code paths have tests.
+6. README documents the button, the Starred view and the cache behaviour.
